@@ -28,6 +28,34 @@ SOURCES: dict[str, str] = {
     "csm_light": "https://www.fda.gov.tw/TC/csmLight.aspx",   # 國外消費紅綠燈（國際回收警訊）
 }
 
+# 每個來源的顯示名與型態。型態決定兩件事：食安頁怎麼標示，以及 `since`
+# 回溯日期適不適用——
+#   監測＝持續更新的公告 feed，列表依發布日期遞減，翻到整頁都早於 since
+#         就可以停，往前的一定更舊。
+#   事件＝單一食安案的專屬清單（如中聯油脂案），列表沒有「日期遞減」這回事；
+#         它唯一含「日期」的欄位是產品的「有效日期」，與列表順序無關。拿
+#         since 去停它會在半途任意截斷整份強制下架清單。
+# 因此 `since` 只能給監測型來源，見 commands.cmd_fda 與 _crawl_by_idx。
+# 未知來源（未來新增的事件）後備為「名稱原文＋事件」——不傳 since 是安全的
+# 那一邊：最多多翻幾頁，不會漏資料。
+SOURCE_META: dict[str, tuple[str, str]] = {
+    "edible_oil": ("中聯油脂案", "事件"),
+    "csm_news": ("國內回收公告", "監測"),
+    "csm_light": ("國際警訊", "監測"),
+}
+
+FEED_KIND = "監測"
+
+
+def source_meta(name: str) -> tuple[str, str]:
+    """(顯示名, 型態)；未知來源後備為「名稱原文＋事件」。"""
+    return SOURCE_META.get(name, (name or "未標來源", "事件"))
+
+
+def is_feed(name: str) -> bool:
+    """此來源是否為 feed 型（日期遞減）——只有它適用 since 提前停止翻頁。"""
+    return source_meta(name)[1] == FEED_KIND
+
 _SUBMIT_PATTERNS = ["查詢", "搜尋", "送出", "確定", "Search"]
 
 
@@ -117,6 +145,10 @@ def _crawl_by_idx(
     實測發現站方分頁的「下一頁」連結會在最後幾頁提前消失（257 頁的清單
     點到 255 頁就沒了），因此只要頁面有標「共 N 頁」且分頁走 query string，
     就直接按頁數走訪，不依賴「下一頁」。
+
+    **刻意沒有 stop_when 參數**，別「補上」——走這條路徑的是事件型清單，
+    它不依日期遞減排序，提前停止翻頁只會任意截斷。呼叫端已經不對事件型
+    來源傳 since（見 SOURCE_META 的說明），所以這裡收不到停止條件是正確的。
     """
     collected: list[tuple[int, Table]] = []
     n = min(total, max_pages)

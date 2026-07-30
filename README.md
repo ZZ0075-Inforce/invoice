@@ -65,7 +65,7 @@ set TWCRAWL_CHROMIUM=C:\Program Files\Google\Chrome\Application\chrome.exe      
 每月例行只要一個指令（登入以外全自動）：
 
 ```powershell
-twcrawl update      # 登入 → fetch → fda → match → export（＋加密備份包）
+twcrawl update      # 登入 → fetch → fda → match → 對獎 → export（＋加密備份包）
 ```
 
 或者分步驟跑，只有第一個需要動手：
@@ -219,14 +219,21 @@ twcrawl backup                             # 互動輸入密碼，或設 TWCRAWL
 ### 7. `update` — 每月例行一鍵跑完
 
 ```powershell
-twcrawl update                # 登入 → fetch（自動補到當月）→ fda → match → export → backup
+twcrawl update                # 登入 → fetch（自動補到當月）→ fda → match → lottery → export → backup
 twcrawl update --no-login     # 憑證還有效時跳過登入
 twcrawl update --no-backup    # 不產備份包
 twcrawl update --no-open      # export 後不自動開儀表板
+twcrawl update --no-cloud     # 對獎時跳過雲端專屬獎清冊（首次下載約 119MB）
 ```
 
 fetch 區間自動推算：從資料庫最新發票的月份（重抓補漏，寫入冪等）到當月；
-FDA 回溯 90 天。
+FDA 回溯 90 天（只對回收公告、國際警訊這類依日期排序的來源有效；事件型的
+專屬下架清單一律整份擷取）。
+
+七步各自獨立：**某一步失敗會記錄下來繼續跑下一步**，結尾列出哪幾步沒過，
+退出碼非零。每一步的產物都即時寫進資料庫，所以就算抓取失敗，後面的比對與
+儀表板拿既有資料重生仍然有意義（儀表板會顯示「已 N 天沒有新發票」）。
+按 Ctrl+C 則會中止整輪。
 
 ---
 
@@ -275,7 +282,7 @@ twcrawl probe <url> # 頁面結構偵察報告（表格 id、表頭、分頁連�
 ## 測試
 
 ```powershell
-python tests\test_twcrawl.py     # 37 個測試，不需要 pytest
+python tests\test_twcrawl.py     # 42 個測試，不需要 pytest
 ```
 
 表格擷取與分頁以本機模擬的 ASP.NET 頁面驗證（含「分頁點了沒反應」與「下一頁提前消失」兩種真實壞掉情境）；解析器、比對、日期邊界、摘要遮蔽則以實際資料形狀驗證。測試會實際啟動 headless Chromium，需先完成 `playwright install`。

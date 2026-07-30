@@ -343,39 +343,51 @@ def check_invoices(conn: sqlite3.Connection, cache_dir: Path) -> dict:
 
 def run_lottery(conn: sqlite3.Connection, cache_dir: Path,
                 fetch: bool = True, cloud: bool = True) -> dict:
-    print("=== 統一發票對獎 ===")
+    """（可選）更新中獎號碼與雲端清冊，然後比對庫內發票。
+
+    只回傳結果，摘要交給 format_result——呼叫端才知道要不要印、印在哪
+    （update 的步驟 runner 會把每步的結果收齊了最後一起輸出）。下載與
+    更新的即時進度仍照印，那是長時間操作必要的回饋。
+    """
+    refreshed: list[str] = []
     if fetch:
-        got = refresh_draws(conn)
-        if got:
-            print("已更新中獎號碼：" + "、".join(period_label(p) for p in got))
+        refreshed = refresh_draws(conn)
+        if refreshed:
+            print("已更新中獎號碼：" + "、".join(period_label(p) for p in refreshed))
         if cloud:
             refresh_cloud(cache_dir)
     result = check_invoices(conn, cache_dir)
+    result["refreshed"] = refreshed
+    result["total_wins"] = sum(len(p["wins"]) for p in result["periods"])
+    result["total_amount"] = sum(w["prize_amount"]
+                                 for p in result["periods"] for w in p["wins"])
+    return result
+
+
+def format_result(result: dict) -> str:
+    """把 run_lottery 的結果排成人看的摘要。"""
     if not result["periods"]:
-        print("資料庫還沒有任何中獎號碼（網路抓取失敗？），無從對起。")
-        return result
-    total_wins = total_amount = 0
+        return "資料庫還沒有任何中獎號碼（網路抓取失敗？），無從對起。"
+    out: list[str] = []
     for p in result["periods"]:
         n_cloud = len(p["cloud_checked"])
         cloud_note = (f"；雲端獎清冊 {n_cloud}/4" if n_cloud < 4
                       else "；含雲端專屬獎")
-        print(f"\n--- {period_label(p['period'])}（{p['n_invoices']} 張參加；"
-              f"領獎 {p['claim_start']} ～ {p['claim_end']}{cloud_note}）---")
+        out.append(f"\n--- {period_label(p['period'])}（{p['n_invoices']} 張參加；"
+                   f"領獎 {p['claim_start']} ～ {p['claim_end']}{cloud_note}）---")
         for w in p["wins"]:
             also = f"（同張亦符合{w['also']}，依規定擇高）" if w["also"] else ""
-            print(f"  🎉 {w['prize']} NT${w['prize_amount']:,}  {w['inv_num']}"
-                  f"  {w['date']}  {w['seller'] or '(店家不明)'}{also}")
+            out.append(f"  🎉 {w['prize']} NT${w['prize_amount']:,}  {w['inv_num']}"
+                       f"  {w['date']}  {w['seller'] or '(店家不明)'}{also}")
         if p["wins"]:
             amt = sum(w["prize_amount"] for w in p["wins"])
-            print(f"  共中 {len(p['wins'])} 筆、NT${amt:,}")
-            total_wins += len(p["wins"])
-            total_amount += amt
+            out.append(f"  共中 {len(p['wins'])} 筆、NT${amt:,}")
         else:
-            print("  沒有中獎")
+            out.append("  沒有中獎")
     n = sum(p["n_invoices"] for p in result["periods"])
-    print(f"\n共 {len(result['periods'])} 期 {n} 張參加、"
-          f"中 {total_wins} 筆、合計 NT${total_amount:,}")
+    out.append(f"\n共 {len(result['periods'])} 期 {n} 張參加、"
+               f"中 {result['total_wins']} 筆、合計 NT${result['total_amount']:,}")
     if result["uncovered"]:
-        print(f"（另有 {result['uncovered']} 張發票不在已開獎期別內：",
-              "尚未開獎或已過領獎期）", sep="")
-    return result
+        out.append(f"（另有 {result['uncovered']} 張發票不在已開獎期別內："
+                   "尚未開獎或已過領獎期）")
+    return "\n".join(out)

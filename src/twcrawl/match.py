@@ -45,7 +45,11 @@ def _fda_fields(rec: dict) -> tuple[str | None, str | None]:
 
 
 def run_match(conn, report_path: Path, classifier: Classifier,
-              since: str | None = None) -> dict[str, int]:
+              since: str | None = None) -> dict:
+    """比對發票與 FDA 清單，寫出報告 CSV，回傳命中結果。
+
+    只回傳不印摘要——判讀明細交給 format_result，由呼叫端決定要不要印。
+    """
     # 稅籍行業後備與 export 走同一份讀取、同一條鏈——這裡曾是雙路 OR，
     # 會讓店家規則已經判定的店（便利商店、百貨）再被稅籍翻成餐飲而濾掉。
     cl = classifier.with_industries(db.seller_industries(conn))
@@ -146,38 +150,8 @@ def run_match(conn, report_path: Path, classifier: Classifier,
                 }
                 (eatery_skips if eatery else news_hits).append(hit)
 
-    print(f"\n【店家 × 問題業者】{len(seller_hits)} 筆"
-          "（發票品項與該業者下架產品有交集，或無明細可查）")
-    for h in seller_hits:
-        print(f"  {h['inv_date']} 發票 {h['inv_num']}「{h['invoice_side']}」"
-              f"≈「{h['fda_side']}」")
-    if seller_clears:
-        print(f"\n【已排除】上榜通路的發票 {len(seller_clears)} 筆——"
-              "品項皆不在該業者下架清單")
-        by_seller: dict[str, int] = {}
-        for h in seller_clears:
-            by_seller[h["fda_side"]] = by_seller.get(h["fda_side"], 0) + 1
-        for s, cnt in sorted(by_seller.items(), key=lambda x: -x[1]):
-            print(f"  {s} ×{cnt}")
-    print(f"\n【品項 × 問題產品】{len(prod_hits)} 筆")
-    for h in prod_hits:
-        print(f"  {h['inv_date']} 發票 {h['inv_num']} {h['invoice_side']}"
-              f" ≈ {h['fda_side']}")
-    print(f"\n【品項 × 回收/警訊標題】{len(news_hits)} 筆（字面命中，需人工確認）")
-    for h in news_hits[:30]:
-        print(f"  {h['inv_date']} 發票 {h['inv_num']} {h['invoice_side']}"
-              f" ≈「{h['fda_side'][:60]}」")
-    if len(news_hits) > 30:
-        print(f"  …其餘 {len(news_hits) - 30} 筆見報告 CSV")
-    if eatery_skips:
-        print(f"\n【已濾除】餐飲現調店家的品項/標題撞名 {len(eatery_skips)} 筆"
-              "（菜名撞包裝品名屬誤報；店家層級不受影響）")
-        for h in eatery_skips[:5]:
-            print(f"  {h['invoice_side']} ≈ {str(h['fda_side'])[:40]}")
-        if len(eatery_skips) > 5:
-            print(f"  …其餘 {len(eatery_skips) - 5} 筆")
-
     hits = seller_hits + prod_hits + news_hits
+    report: Path | None = None
     if hits:
         report = Path(report_path)
         report.parent.mkdir(parents=True, exist_ok=True)
@@ -185,13 +159,62 @@ def run_match(conn, report_path: Path, classifier: Classifier,
             w = csv.DictWriter(f, fieldnames=list(hits[0].keys()))
             w.writeheader()
             w.writerows(hits)
-        print(f"\n報告 → {report}")
-    else:
-        print("\n→ 沒有任何匹配。")
     return {
         "seller_hits": len(seller_hits),
         "prod_hits": len(prod_hits),
         "news_hits": len(news_hits),
         "eatery_skips": len(eatery_skips),
         "seller_clears": len(seller_clears),
+        "report": str(report) if report else None,
+        "rows": {
+            "seller": seller_hits,
+            "prod": prod_hits,
+            "news": news_hits,
+            "eatery_skips": eatery_skips,
+            "seller_clears": seller_clears,
+        },
     }
+
+
+def format_result(result: dict) -> str:
+    """把 run_match 的結果排成人看的判讀明細。"""
+    rows = result["rows"]
+    seller_hits, prod_hits = rows["seller"], rows["prod"]
+    news_hits, eatery_skips = rows["news"], rows["eatery_skips"]
+    seller_clears = rows["seller_clears"]
+
+    out: list[str] = [
+        f"\n【店家 × 問題業者】{len(seller_hits)} 筆"
+        "（發票品項與該業者下架產品有交集，或無明細可查）"
+    ]
+    for h in seller_hits:
+        out.append(f"  {h['inv_date']} 發票 {h['inv_num']}「{h['invoice_side']}」"
+                   f"≈「{h['fda_side']}」")
+    if seller_clears:
+        out.append(f"\n【已排除】上榜通路的發票 {len(seller_clears)} 筆——"
+                   "品項皆不在該業者下架清單")
+        by_seller: dict[str, int] = {}
+        for h in seller_clears:
+            by_seller[h["fda_side"]] = by_seller.get(h["fda_side"], 0) + 1
+        for s, cnt in sorted(by_seller.items(), key=lambda x: -x[1]):
+            out.append(f"  {s} ×{cnt}")
+    out.append(f"\n【品項 × 問題產品】{len(prod_hits)} 筆")
+    for h in prod_hits:
+        out.append(f"  {h['inv_date']} 發票 {h['inv_num']} {h['invoice_side']}"
+                   f" ≈ {h['fda_side']}")
+    out.append(f"\n【品項 × 回收/警訊標題】{len(news_hits)} 筆（字面命中，需人工確認）")
+    for h in news_hits[:30]:
+        out.append(f"  {h['inv_date']} 發票 {h['inv_num']} {h['invoice_side']}"
+                   f" ≈「{h['fda_side'][:60]}」")
+    if len(news_hits) > 30:
+        out.append(f"  …其餘 {len(news_hits) - 30} 筆見報告 CSV")
+    if eatery_skips:
+        out.append(f"\n【已濾除】餐飲現調店家的品項/標題撞名 {len(eatery_skips)} 筆"
+                   "（菜名撞包裝品名屬誤報；店家層級不受影響）")
+        for h in eatery_skips[:5]:
+            out.append(f"  {h['invoice_side']} ≈ {str(h['fda_side'])[:40]}")
+        if len(eatery_skips) > 5:
+            out.append(f"  …其餘 {len(eatery_skips) - 5} 筆")
+    out.append(f"\n報告 → {result['report']}" if result["report"]
+               else "\n→ 沒有任何匹配。")
+    return "\n".join(out)
