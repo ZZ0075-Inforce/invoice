@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>twcrawl 食安頁</title>
+<script>(function () {
+  var t = localStorage.getItem("twcrawl-theme");
+  if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+})();</script>
+<style>
+  :root {
+    color-scheme: light;
+    --page:        #f9f9f7;
+    --surface-1:   #fcfcfb;
+    --text-1:      #0b0b0b;
+    --text-2:      #52514e;
+    --muted:       #898781;
+    --grid:        #e1e0d9;
+    --border:      rgba(11,11,11,0.10);
+    --s1: #2a78d6;
+    --warning: #b26a00; --event: #a13c1f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page:      #0d0d0d;
+      --surface-1: #1a1a19;
+      --text-1:    #ffffff;
+      --text-2:    #c3c2b7;
+      --muted:     #898781;
+      --grid:      #2c2c2a;
+      --border:    rgba(255,255,255,0.10);
+      --s1: #3987e5;
+      --warning: #eda100; --event: #e87f5c;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page:      #0d0d0d;
+    --surface-1: #1a1a19;
+    --text-1:    #ffffff;
+    --text-2:    #c3c2b7;
+    --muted:     #898781;
+    --grid:      #2c2c2a;
+    --border:    rgba(255,255,255,0.10);
+    --s1: #3987e5;
+    --warning: #eda100; --event: #e87f5c;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page); color: var(--text-1);
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif;
+    font-size: 14px; line-height: 1.5; padding: 24px 16px 48px;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; }
+  header { margin-bottom: 16px; position: relative; }
+  button.theme { position: absolute; top: 0; right: 0;
+                 border: 1px solid var(--border); background: var(--surface-1);
+                 color: var(--text-2); border-radius: 999px; padding: 3px 12px;
+                 cursor: pointer; font: inherit; font-size: 12px; }
+  h1 { font-size: 20px; font-weight: 650; }
+  .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  h2 { font-size: 14.5px; font-weight: 650; margin-bottom: 2px; }
+  .desc { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 18px; margin-bottom: 16px;
+  }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+           gap: 12px; margin-bottom: 16px; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border);
+          border-radius: 10px; padding: 14px 16px; }
+  .tile .label { color: var(--text-2); font-size: 12.5px; }
+  .tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; }
+  .tile .delta { font-size: 12px; margin-top: 2px; color: var(--text-2); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .chip {
+    border: 1px solid var(--border); background: var(--surface-1);
+    color: var(--text-2); border-radius: 999px; padding: 4px 14px;
+    font-size: 13px; cursor: pointer; font-family: inherit;
+  }
+  .chip.on { border-color: var(--s1); color: var(--s1); font-weight: 650; }
+  .kind { font-size: 11px; border-radius: 5px; padding: 0 6px; margin-left: 6px;
+          border: 1px solid var(--border); color: var(--text-2); }
+  .kind.event { color: var(--event); border-color: var(--event); }
+  .stat { color: var(--muted); font-size: 12.5px; margin: 6px 0 8px; }
+  .scrollx { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px;
+       border-bottom: 1px solid var(--grid); padding: 4px 10px 4px 0; }
+  td { border-bottom: 1px solid var(--grid); padding: 5px 10px 5px 0;
+       vertical-align: top; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.src { cursor: pointer; }
+  tr.src:hover td { background: color-mix(in srgb, var(--grid) 35%, transparent); }
+  .empty { padding: 40px; text-align: center; color: var(--text-2); }
+  code { background: var(--grid); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+  a.map { color: var(--s1); text-decoration: none; }
+  a.map:hover { text-decoration: underline; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .warn { color: var(--warning); }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="empty">
+  找不到資料（data.js）。<br><br>
+  請開 <b><code>out\fda.html</code></b>——<code>twcrawl export</code> 會把模板與
+  data.js 一起放在那裡。
+</div></div>
+<script src="data.js"></script>
+<script>
+(function () {
+  const D = window.TWCRAWL_DATA;
+  if (!D || !D.fda) return;
+  const F = D.fda;
+  const SRC = F.sources || [];
+  const MATCHES = F.matches || [];
+
+  const app = document.getElementById("app");
+  app.innerHTML = "";
+  const esc = s => String(s).replace(/[&<>"]/g,
+    ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]));
+  const el = (tag, cls, html) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (html !== undefined) e.innerHTML = html;
+    return e;
+  };
+  const kindTag = k =>
+    `<span class="kind${k === "事件" ? " event" : ""}">${esc(k)}</span>`;
+
+  // ---- 版頭與分頁 -------------------------------------------------------
+  const hd = el("header");
+  hd.innerHTML = "<h1>食安頁（FDA 比對）</h1>" +
+    '<div class="sub"><a class="map" href="dashboard.html">← 回儀表板</a>　' +
+    '<a class="map" href="query.html">🔍 查詢頁</a>　' +
+    '<a class="map" href="map.html">🗺 消費地圖</a></div>';
+  (function () {
+    const THEMES = [["", "🌗 自動"], ["light", "☀️ 亮"], ["dark", "🌙 暗"]];
+    const cur = document.documentElement.dataset.theme || "";
+    const tb = el("button", "theme", THEMES.find(x => x[0] === cur)[1]);
+    tb.title = "亮暗主題（自動→亮→暗）";
+    tb.addEventListener("click", () => {
+      const next = THEMES[(THEMES.findIndex(x => x[0] === cur) + 1)
+        % THEMES.length][0];
+      if (next) localStorage.setItem("twcrawl-theme", next);
+      else localStorage.removeItem("twcrawl-theme");
+      location.reload();
+    });
+    hd.append(tb);
+  })();
+  app.append(hd);
+
+  const chips = el("div", "chips");
+  const tabs = [{ key: "", label: "總覽" }].concat(
+    SRC.map(s => ({ key: s.key, label: s.label })));
+  for (const t of tabs) {
+    const b = el("button", "chip", esc(t.label));
+    b.dataset.key = t.key;
+    b.addEventListener("click", () => show(t.key));
+    chips.append(b);
+  }
+  app.append(chips);
+  const body = el("div");
+  app.append(body);
+  app.append(el("div", "note",
+    `資料截至 ${esc(D.generatedAt || "")}・全部在本機、不外連（docs/adr/0001）・` +
+    "完整命中欄位在 out/match_report.csv"));
+
+  // ---- 總覽 -------------------------------------------------------------
+  function overview() {
+    const total = MATCHES.length;
+    const byLevel = F.match || {};
+    const levelStr = Object.entries(byLevel)
+      .map(([k, v]) => `${k} ${v}`).join("・") || "—";
+    const lastSeen = SRC.map(s => s.lastSeen).filter(Boolean).sort().slice(-1)[0];
+
+    const tiles = el("div", "tiles");
+    for (const [label, value, extra] of [
+      ["比對命中", total + " 筆", levelStr],
+      ["問題商品清單", (F.rows || 0).toLocaleString("zh-TW") + " 筆",
+       `${SRC.length} 個來源`],
+      ["清單最後更新", lastSeen || "—", "twcrawl fda / update 會更新"],
+    ]) {
+      const t = el("div", "tile");
+      t.append(el("div", "label", label), el("div", "value", value));
+      if (extra) t.append(el("div", "delta", extra));
+      tiles.append(t);
+    }
+    body.append(tiles);
+
+    const sc = el("div", "card");
+    sc.append(el("h2", null, "事件與監測來源"));
+    sc.append(el("div", "desc",
+      "「事件」＝有專屬下架／回收清單的單一食安案；「監測」＝持續更新的公告 feed，" +
+      "未來的新事件會從這裡浮現。新增來源後這頁會自動長出分頁。點列進入該來源。"));
+    const wrapT = el("div", "scrollx");
+    wrapT.innerHTML = "<table><tr><th>來源</th><th>型態</th>" +
+      '<th class="num">清單筆數</th><th class="num">命中</th><th>最後更新</th></tr>' +
+      SRC.map(s =>
+        `<tr class="src" data-key="${esc(s.key)}"><td>${esc(s.label)}</td>` +
+        `<td>${kindTag(s.kind)}</td>` +
+        `<td class="num">${(s.rows || 0).toLocaleString("zh-TW")}</td>` +
+        `<td class="num">${s.hits || 0}</td>` +
+        `<td>${esc(s.lastSeen || "—")}</td></tr>`).join("") + "</table>";
+    wrapT.querySelectorAll("tr.src").forEach(tr =>
+      tr.addEventListener("click", () => show(tr.dataset.key)));
+    sc.append(wrapT);
+    body.append(sc);
+
+    const lv = el("div", "card");
+    lv.append(el("h2", null, "命中怎麼判讀"));
+    lv.append(el("div", "desc",
+      '<span class="warn">⚠ 命中不等於買到問題商品</span>——三個層級的可信度不同：'));
+    lv.insertAdjacentHTML("beforeend",
+      '<div class="scrollx"><table>' +
+      "<tr><th>層級</th><th>意義</th><th>怎麼判讀</th></tr>" +
+      "<tr><td>店家</td><td>你在「榜上有名的通路」消費過</td>" +
+      "<td>只代表該通路曾有產品下架，不代表你買到</td></tr>" +
+      "<tr><td>品項</td><td>發票品項名稱對上下架產品名稱</td>" +
+      "<td>名稱愈具體愈可信；通用菜名（炒飯、豬排）多為巧合</td></tr>" +
+      "<tr><td>警訊標題</td><td>品項名稱出現在回收公告標題中</td>" +
+      "<td>字面命中而已，一律需人工確認</td></tr>" +
+      "</table></div>");
+    body.append(lv);
+  }
+
+  // ---- 單一來源 ---------------------------------------------------------
+  function sourceView(key) {
+    const s = SRC.find(x => x.key === key);
+    if (!s) { body.append(el("div", "note", "找不到這個來源。")); return; }
+    const hits = MATCHES.filter(m => m.source === key);
+    const card = el("div", "card");
+    card.append(el("h2", null, esc(s.label) + kindTag(s.kind)));
+    card.append(el("div", "stat",
+      `清單 ${(s.rows || 0).toLocaleString("zh-TW")} 筆・最後更新 ${esc(s.lastSeen || "—")}` +
+      `・命中 ${hits.length} 筆`));
+    if (hits.length) {
+      const wrapT = el("div", "scrollx");
+      wrapT.innerHTML = "<table><tr><th>日期</th><th>層級</th><th>發票端</th>" +
+        "<th>FDA 端</th><th>發票號碼</th></tr>" +
+        hits.map(m =>
+          `<tr><td>${esc(m.date || "—")}</td><td>${esc(m.level || "—")}</td>` +
+          `<td>${esc(m.invoice || "—")}</td><td>${esc(m.fda || "—")}</td>` +
+          `<td>${m.num
+            ? `<a class="map" href="query.html?q=${encodeURIComponent(m.num)}">${esc(m.num)}</a>`
+            : "—"}</td></tr>`
+        ).join("") + "</table>";
+      card.append(wrapT);
+      card.append(el("div", "note",
+        "⚠ 命中≠買到問題商品，判讀基準見總覽分頁。點發票號碼到查詢頁看該張" +
+        "完整品項。"));
+    } else {
+      card.append(el("div", "note",
+        "這個來源目前沒有比對命中。清單有更新時重跑 twcrawl match（或 update）即重算。"));
+    }
+    body.append(card);
+  }
+
+  function show(key) {
+    for (const b of chips.children)
+      b.classList.toggle("on", b.dataset.key === key);
+    body.innerHTML = "";
+    if (!key) overview();
+    else sourceView(key);
+  }
+
+  const P = new URLSearchParams(location.search);
+  const want = P.get("src") || "";
+  show(SRC.some(s => s.key === want) ? want : "");
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>twcrawl 消費地圖</title>
+<script>(function () {
+  var t = localStorage.getItem("twcrawl-theme");
+  if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+})();</script>
+<link rel="stylesheet" href="vendor/leaflet.css">
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface-1: #fcfcfb;
+    --text-1: #0b0b0b; --text-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --border: rgba(11,11,11,0.10);
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;
+    --s4: #eda100; --s5: #e87ba4; --s6: #008300; --other: #898781;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface-1: #1a1a19;
+      --text-1: #ffffff; --text-2: #c3c2b7;
+      --grid: #2c2c2a; --border: rgba(255,255,255,0.10);
+      --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+      --s4: #c98500; --s5: #d55181; --s6: #008300;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface-1: #1a1a19;
+    --text-1: #ffffff; --text-2: #c3c2b7;
+    --grid: #2c2c2a; --border: rgba(255,255,255,0.10);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+    --s4: #c98500; --s5: #d55181; --s6: #008300;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page); color: var(--text-1);
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif;
+    font-size: 14px; line-height: 1.5;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  header {
+    padding: 12px 16px 10px; display: flex; flex-wrap: wrap;
+    align-items: center; gap: 8px 16px;
+  }
+  h1 { font-size: 16px; font-weight: 650; margin-right: auto; }
+  h1 a { color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 400; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .chip {
+    border: 1px solid var(--border); background: var(--surface-1);
+    color: var(--text-2); border-radius: 999px; padding: 3px 12px;
+    font-size: 12.5px; cursor: pointer;
+  }
+  .chip.on { border-color: var(--s1); color: var(--s1); font-weight: 650; }
+  .custom { display: flex; gap: 4px; align-items: center; font-size: 12.5px;
+            color: var(--text-2); }
+  .custom input {
+    border: 1px solid var(--border); background: var(--surface-1);
+    color: var(--text-1); border-radius: 6px; padding: 2px 6px; font: inherit;
+  }
+  button.theme { border: 1px solid var(--border); background: var(--surface-1);
+                 color: var(--text-2); border-radius: 999px; padding: 3px 12px;
+                 cursor: pointer; font: inherit; font-size: 12.5px; }
+  #legend { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 0 16px 8px;
+            font-size: 12px; color: var(--text-2); }
+  #legend button.leg { display: inline-flex; align-items: center; gap: 5px;
+    border: 0; background: none; color: var(--text-2); font: inherit;
+    font-size: 12px; cursor: pointer; padding: 0; }
+  #legend button.leg:not(.on) { opacity: 0.35; text-decoration: line-through; }
+  .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  #stat { padding: 0 16px 8px; font-size: 12.5px; color: var(--muted); }
+  #map { flex: 1; min-height: 0; }
+  #nogeo {
+    padding: 8px 16px; font-size: 12px; color: var(--muted);
+    border-top: 1px solid var(--grid); max-height: 120px; overflow-y: auto;
+  }
+  .leaflet-popup-content { font: 12.5px/1.5 system-ui, "Microsoft JhengHei", sans-serif; }
+  .leaflet-popup-content b { font-size: 13px; }
+  .empty { padding: 40px; text-align: center; color: var(--text-2); }
+  code { background: var(--grid); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>消費地圖 <a href="dashboard.html">← 回儀表板</a></h1>
+  <div class="chips" id="chips"></div>
+  <div class="custom">
+    <input type="month" id="mFrom"> ～ <input type="month" id="mTo">
+  </div>
+  <div class="custom">
+    <input type="search" id="sfind" list="sellergeo" placeholder="🔎 找店家">
+    <datalist id="sellergeo"></datalist>
+  </div>
+</header>
+<div id="legend"></div>
+<div id="stat"></div>
+<div id="map"><div class="empty">
+  找不到資料（data.js）——請開 <code>out\map.html</code>，
+  並先跑過 <code>twcrawl export</code>。
+</div></div>
+<div id="nogeo"></div>
+<script src="vendor/leaflet.js"></script>
+<script src="data.js"></script>
+<script>
+(function () {
+  const D = window.TWCRAWL_DATA;
+  if (!D || !D.sellers || typeof L === "undefined") return;
+
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const SLOTS = ["--s1","--s2","--s3","--s4","--s5","--s6"];
+  const topCats = D.categories.filter(c => c.name !== "未分類").slice(0, 6).map(c => c.name);
+  const catColor = c => {
+    const i = topCats.indexOf(c);
+    return i >= 0 ? css(SLOTS[i]) : css("--other");
+  };
+  const nt = x => "NT$" + Math.round(x).toLocaleString("zh-TW");
+  const esc = s => String(s).replace(/[&<>"]/g,
+    ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]));
+
+  // 店家索引（display name → 靜態資訊）
+  const meta = {};
+  for (const s of D.sellers) meta[s.name] = s;
+
+  // ---- 地圖底座 --------------------------------------------------------
+  document.getElementById("map").innerHTML = "";
+  const map = L.map("map");
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> 貢獻者・圖磚自 openstreetmap.org 載入（開啟本頁即對外連線；資料與座標皆在本機）',
+  }).addTo(map);
+  const layer = L.layerGroup().addTo(map);
+  const markerByName = {};   // 本輪 render 的圓點索引（店家搜尋定位用）
+
+  // ---- 期間篩選 --------------------------------------------------------
+  const dates = D.invoices.map(v => v.date).sort();
+  const maxD = dates[dates.length - 1] || "";
+  const minD = dates[0] || "";
+  const mFrom = document.getElementById("mFrom");
+  const mTo = document.getElementById("mTo");
+  mFrom.min = mTo.min = minD.slice(0, 7);
+  mFrom.max = mTo.max = maxD.slice(0, 7);
+
+  function shiftMonth(ym, n) {
+    let [y, m] = ym.split("-").map(Number);
+    m += n;
+    while (m <= 0) { m += 12; y -= 1; }
+    while (m > 12) { m -= 12; y += 1; }
+    return `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}`;
+  }
+  const PRESETS = [
+    { key: "all", label: "全部", from: () => minD.slice(0, 7), to: () => maxD.slice(0, 7) },
+    { key: "3m", label: "近三月", from: () => shiftMonth(maxD.slice(0, 7), -2), to: () => maxD.slice(0, 7) },
+    { key: "1m", label: "近一月", from: () => maxD.slice(0, 7), to: () => maxD.slice(0, 7) },
+  ];
+  const chipsBox = document.getElementById("chips");
+  for (const p of PRESETS) {
+    const b = document.createElement("button");
+    b.className = "chip"; b.textContent = p.label; b.dataset.key = p.key;
+    b.addEventListener("click", () => {
+      mFrom.value = p.from(); mTo.value = p.to();
+      render(p.key);
+    });
+    chipsBox.append(b);
+  }
+  mFrom.addEventListener("change", () => render("custom"));
+  mTo.addEventListener("change", () => render("custom"));
+
+  // ---- 呈現 ------------------------------------------------------------
+  let fitted = false;
+  let curKey = "3m";
+  const hidden = new Set();     // 圖例點掉的分類
+  function render(activeKey) {
+    curKey = activeKey;
+    for (const b of chipsBox.children)
+      b.classList.toggle("on", b.dataset.key === activeKey);
+    const f = (mFrom.value || minD.slice(0, 7)) + "-01";
+    const t = (mTo.value || maxD.slice(0, 7)) + "-31";
+
+    const agg = {};   // display name → {total, count}
+    let inRange = 0, sum = 0;
+    for (const v of D.invoices) {
+      if (v.date < f || v.date > t) continue;
+      inRange++; sum += v.amount;
+      (agg[v.seller] ||= { total: 0, count: 0 });
+      agg[v.seller].total += v.amount;
+      agg[v.seller].count += 1;
+    }
+
+    layer.clearLayers();
+    for (const k in markerByName) delete markerByName[k];
+    const pts = [];
+    const noGeo = [];
+    const max = Math.max(1, ...Object.values(agg).map(a => a.total));
+    for (const [name, a] of Object.entries(agg).sort((x, y) => y[1].total - x[1].total)) {
+      const m = meta[name];
+      const bucket = m && topCats.includes(m.category) ? m.category : "其他/未分類";
+      if (hidden.has(bucket)) continue;   // 圖例點掉的分類：不畫也不列無座標清單
+      if (!m || m.lat == null || m.lon == null) { noGeo.push({ name, ...a }); continue; }
+      const r = 6 + 14 * Math.sqrt(a.total / max);
+      const mk = L.circleMarker([m.lat, m.lon], {
+        radius: r, color: "#fff", weight: 2,          // 2px surface ring
+        fillColor: catColor(m.category), fillOpacity: 0.85,
+      });
+      mk.bindTooltip(`${m.name}・${nt(a.total)}`);
+      mk.bindPopup(
+        `<b>${esc(m.name)}</b>` +
+        (m.legal ? `<br>${esc(m.legal)}` : "") +
+        `<br>分類：${esc(m.category)}` +
+        (m.industry ? `<br>稅籍行業：${esc(m.industry)}` : "") +
+        `<br>期間消費：${nt(a.total)}（${a.count} 筆）` +
+        (m.topItems && m.topItems.length ? `<br>常買：${esc(m.topItems.join("、"))}` : "") +
+        (m.address ? `<br>${esc(m.address)}` : "") +
+        `<br><a href="query.html?seller=${encodeURIComponent(m.name)}">查這家 →</a>`);
+      mk.addTo(layer);
+      markerByName[m.name] = mk;
+      pts.push([m.lat, m.lon]);
+    }
+    if (pts.length && !fitted) {
+      map.fitBounds(pts, { padding: [30, 30], maxZoom: 15 });
+      fitted = true;
+    }
+
+    const geoSum = Object.entries(agg)
+      .filter(([n]) => meta[n] && meta[n].lat != null)
+      .reduce((s, [, a]) => s + a.total, 0);
+    document.getElementById("stat").textContent =
+      `${mFrom.value || "…"} ～ ${mTo.value || "…"}：${inRange} 張發票・${nt(sum)}` +
+      `・地圖顯示 ${pts.length} 家（${nt(geoSum)}）`;
+
+    const ng = document.getElementById("nogeo");
+    ng.innerHTML = noGeo.length
+      ? "無座標（發票沒帶統編、未跑 bizreg/geocode 或地址解不開，金額不在地圖上）：" +
+        noGeo.map(x => `${esc(x.name)} ${nt(x.total)}`).join("・")
+      : "";
+  }
+
+  // 圖例（點選顯示／隱藏該分類）
+  const lg = document.getElementById("legend");
+  for (const c of topCats.concat(["其他/未分類"])) {
+    const b = document.createElement("button");
+    b.className = "leg on";
+    b.title = "點選顯示／隱藏";
+    b.innerHTML = `<i class="swatch" style="background:${
+      c === "其他/未分類" ? css("--other") : catColor(c)}"></i>${esc(c)}`;
+    b.addEventListener("click", () => {
+      if (hidden.has(c)) hidden.delete(c); else hidden.add(c);
+      b.classList.toggle("on", !hidden.has(c));
+      render(curKey);
+    });
+    lg.append(b);
+  }
+
+  // 店家搜尋定位：只列有座標的店家；選了就飛過去、圓點在畫面上就開 popup
+  const sfind = document.getElementById("sfind");
+  const sdl = document.getElementById("sellergeo");
+  for (const s of D.sellers) {
+    if (s.lat != null && s.lon != null) {
+      const o = document.createElement("option");
+      o.value = s.name;
+      sdl.append(o);
+    }
+  }
+  sfind.addEventListener("change", () => {
+    const m = meta[sfind.value];
+    if (!m || m.lat == null) return;
+    map.flyTo([m.lat, m.lon], Math.max(map.getZoom(), 16));
+    const mk = markerByName[m.name];
+    if (mk) setTimeout(() => mk.openPopup(), 650);
+    // 圓點不在目前時間區間內就只定位不開泡泡（金額不在篩選範圍）
+  });
+
+  // 亮暗切換（與其他頁共用 localStorage twcrawl-theme）
+  (function () {
+    const THEMES = [["", "🌗 自動"], ["light", "☀️ 亮"], ["dark", "🌙 暗"]];
+    const cur = document.documentElement.dataset.theme || "";
+    const tb = document.createElement("button");
+    tb.className = "theme";
+    tb.textContent = THEMES.find(x => x[0] === cur)[1];
+    tb.title = "亮暗主題（自動→亮→暗）";
+    tb.addEventListener("click", () => {
+      const next = THEMES[(THEMES.findIndex(x => x[0] === cur) + 1)
+        % THEMES.length][0];
+      if (next) localStorage.setItem("twcrawl-theme", next);
+      else localStorage.removeItem("twcrawl-theme");
+      location.reload();
+    });
+    document.querySelector("header").append(tb);
+  })();
+
+  // 預設近三月
+  mFrom.value = PRESETS[1].from(); mTo.value = PRESETS[1].to();
+  render("3m");
+})();
+</script>
+</body>
+</html>

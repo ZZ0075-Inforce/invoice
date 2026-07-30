@@ -1,0 +1,781 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>twcrawl 消費儀表板</title>
+<script>(function () {
+  var t = localStorage.getItem("twcrawl-theme");
+  if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+})();</script>
+<style>
+  :root {
+    color-scheme: light;
+    --page:        #f9f9f7;
+    --surface-1:   #fcfcfb;
+    --text-1:      #0b0b0b;
+    --text-2:      #52514e;
+    --muted:       #898781;
+    --grid:        #e1e0d9;
+    --baseline:    #c3c2b7;
+    --border:      rgba(11,11,11,0.10);
+    --up-good:     #006300;
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;
+    --s4: #eda100; --s5: #e87ba4; --s6: #008300;
+    --other: #898781;
+    --warning: #fab219; --serious: #ec835a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page:      #0d0d0d;
+      --surface-1: #1a1a19;
+      --text-1:    #ffffff;
+      --text-2:    #c3c2b7;
+      --muted:     #898781;
+      --grid:      #2c2c2a;
+      --baseline:  #383835;
+      --border:    rgba(255,255,255,0.10);
+      --up-good:   #0ca30c;
+      --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+      --s4: #c98500; --s5: #d55181; --s6: #008300;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page:      #0d0d0d;
+    --surface-1: #1a1a19;
+    --text-1:    #ffffff;
+    --text-2:    #c3c2b7;
+    --muted:     #898781;
+    --grid:      #2c2c2a;
+    --baseline:  #383835;
+    --border:    rgba(255,255,255,0.10);
+    --up-good:   #0ca30c;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+    --s4: #c98500; --s5: #d55181; --s6: #008300;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page); color: var(--text-1);
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif;
+    font-size: 14px; line-height: 1.5; padding: 24px 16px 48px;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; }
+  header { margin-bottom: 20px; position: relative; }
+  button.theme { position: absolute; top: 0; right: 0;
+                 border: 1px solid var(--border); background: var(--surface-1);
+                 color: var(--text-2); border-radius: 999px; padding: 3px 12px;
+                 cursor: pointer; font: inherit; font-size: 12px; }
+  h1 { font-size: 20px; font-weight: 650; }
+  .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  h2 { font-size: 14.5px; font-weight: 650; margin-bottom: 2px; }
+  .desc { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 18px; margin-bottom: 16px;
+  }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+           gap: 12px; margin-bottom: 16px; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border);
+          border-radius: 10px; padding: 14px 16px; }
+  .tile .label { color: var(--text-2); font-size: 12.5px; }
+  .tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+  .tile .delta { font-size: 12px; margin-top: 2px; color: var(--text-2); }
+  .tile .delta.good { color: var(--up-good); }
+  .tile .delta.bad  { color: #d03b3b; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 8px 0 4px;
+            font-size: 12px; color: var(--text-2); }
+  .legend button.leg { display: inline-flex; align-items: center; gap: 5px;
+    border: 0; background: none; color: var(--text-2); font: inherit;
+    font-size: 12px; cursor: pointer; padding: 0; }
+  .legend.picking button.leg:not(.sel) { opacity: 0.4; }
+  .legend button.leg.sel { font-weight: 650; }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  svg { display: block; width: 100%; height: auto; }
+  svg text { font-family: inherit; }
+  .scrollx { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px;
+       border-bottom: 1px solid var(--grid); padding: 4px 10px 4px 0; }
+  td { border-bottom: 1px solid var(--grid); padding: 5px 10px 5px 0; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  #tooltip {
+    position: fixed; pointer-events: none; z-index: 10; display: none;
+    background: var(--surface-1); color: var(--text-1);
+    border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+    padding: 8px 12px; font-size: 12.5px; max-width: 280px;
+  }
+  #tooltip .tt-title { font-weight: 650; margin-bottom: 4px; }
+  #tooltip .tt-row { display: flex; justify-content: space-between; gap: 16px; }
+  #tooltip .tt-row .v { font-variant-numeric: tabular-nums; }
+  a.map { color: var(--s1); text-decoration: none; font-size: 12px; }
+  a.map:hover { text-decoration: underline; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .empty { padding: 40px; text-align: center; color: var(--text-2); }
+  code { background: var(--grid); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .catin { border: 1px solid var(--border); background: var(--surface-1);
+           color: var(--text-1); border-radius: 6px; padding: 2px 6px;
+           width: 110px; font: inherit; font-size: 12.5px; }
+  button.rule { border: 1px solid var(--border); background: var(--surface-1);
+                color: var(--s1); border-radius: 999px; padding: 2px 10px;
+                cursor: pointer; font: inherit; font-size: 12px;
+                white-space: nowrap; }
+  #savebar { position: fixed; left: 50%; transform: translateX(-50%);
+             bottom: 18px; z-index: 20; background: var(--surface-1);
+             border: 1px solid var(--border); border-radius: 999px;
+             padding: 8px 18px; box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+             font-size: 13px; }
+  #savebar button { border: 0; background: none; color: var(--s1);
+                    cursor: pointer; font: inherit; padding: 0; }
+  #savebar button:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="empty">
+  找不到資料（data.js）。<br><br>
+  最常見的原因：開到了 <code>src\twcrawl\web\dashboard.html</code>（這是模板）。<br>
+  請開 <b><code>out\dashboard.html</code></b>——<code>twcrawl export</code> 會把模板與
+  data.js 一起放在那裡。<br><br>
+  若開的已是 out\ 下的檔案，請重跑 <code>twcrawl export</code>，
+  並確認 data.js 沒有被搬走。
+</div></div>
+<div id="tooltip"></div>
+<script src="data.js"></script>
+<script>
+(function () {
+  const D = window.TWCRAWL_DATA;
+  if (!D || !D.months || !D.months.length) return;
+
+  const app = document.getElementById("app");
+  app.innerHTML = "";
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const SLOTS = ["--s1","--s2","--s3","--s4","--s5","--s6"];
+  const OTHER = "其他（含未分類）";
+
+  const nt = x => "NT$" + Math.round(x).toLocaleString("zh-TW");
+  const compact = x => x >= 10000 ? "NT$" + (x/10000).toFixed(1) + " 萬" : nt(x);
+  // 地圖連結：使用者點擊才離開頁面（頁面本身不自動外連，見 docs/adr/0001）
+  // 有稅籍地址就一併帶上，搜尋準得多
+  const mapsUrl = (name, addr) => "https://www.google.com/maps/search/?api=1&query=" +
+    encodeURIComponent((String(name)
+      .replace(/股份有限公司|企業有限公司|國際有限公司|有限公司|企業社|實業社/g, " ")
+      .replace(/\s+/g, " ").trim() + (addr ? " " + addr : "")));
+  const mapA = (name, addr) =>
+    `<a class="map" href="${mapsUrl(name, addr)}" target="_blank" rel="noopener">地圖</a>`;
+  const el = (tag, cls, html) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (html !== undefined) e.innerHTML = html;
+    return e;
+  };
+  const svgEl = (tag, attrs) => {
+    const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  };
+
+  // ---- 同頁雙模式（ADR-0002）：serve 可寫回，file:// 提供複製 -----------
+  const SERVE = location.protocol.startsWith("http");
+  async function saveRules(set, aliases) {
+    try {
+      const r = await fetch("/api/rules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ set, aliases }),
+      });
+      const j = await r.json();
+      if (!j.ok) console.error("寫回失敗：" + j.error);
+      return !!j.ok;
+    } catch (e) { console.error(e); return false; }
+  }
+  async function copyText(t) {
+    try { await navigator.clipboard.writeText(t); return true; }
+    catch (_e) {
+      const ta = document.createElement("textarea");
+      ta.value = t; document.body.append(ta); ta.select();
+      const ok = document.execCommand("copy"); ta.remove(); return ok;
+    }
+  }
+  let savedN = 0;   // 存檔浮動提示：累計本頁寫回筆數，提醒重新整理看重算結果
+  function noteSaved(n) {
+    savedN += n;
+    let bar = document.getElementById("savebar");
+    if (!bar) { bar = el("div"); bar.id = "savebar"; document.body.append(bar); }
+    bar.innerHTML = `已寫回 ${savedN} 筆規則，資料已重生——` +
+      '<button id="reloadbtn">重新整理看結果</button>';
+    bar.querySelector("#reloadbtn")
+      .addEventListener("click", () => location.reload());
+  }
+
+  // ---- tooltip ----------------------------------------------------------
+  const tt = document.getElementById("tooltip");
+  function showTip(evt, html) {
+    tt.innerHTML = html;
+    tt.style.display = "block";
+    const pad = 14, w = tt.offsetWidth, h = tt.offsetHeight;
+    let x = evt.clientX + pad, y = evt.clientY + pad;
+    if (x + w > innerWidth - 8) x = evt.clientX - w - pad;
+    if (y + h > innerHeight - 8) y = evt.clientY - h - pad;
+    tt.style.left = x + "px"; tt.style.top = y + "px";
+  }
+  const hideTip = () => { tt.style.display = "none"; };
+
+  // ---- 資料整形 ---------------------------------------------------------
+  // 月度堆疊：全期金額前 6 大分類各佔一個色槽，其餘（含未分類）合併為中性灰
+  const topCats = D.categories.filter(c => c.name !== "未分類").slice(0, 6).map(c => c.name);
+  const series = topCats.concat([OTHER]);
+  const color = i => i < topCats.length ? css(SLOTS[i]) : css("--other");
+  const months = D.months.map(m => {
+    const by = {}; let other = 0;
+    for (const [cat, amt] of Object.entries(m.byCategory)) {
+      if (topCats.includes(cat)) by[cat] = (by[cat] || 0) + amt;
+      else other += amt;
+    }
+    by[OTHER] = other;
+    return { ...m, by };
+  });
+  const years = new Set(months.map(m => m.month.slice(0, 4)));
+  const mLabel = m => years.size > 1
+    ? m.month.slice(2, 4) + "/" + m.month.slice(5)
+    : Number(m.month.slice(5)) + "月";
+
+  // ---- 上方統計磚 -------------------------------------------------------
+  const tiles = el("div", "tiles");
+  const last = months[months.length - 1], prev = months[months.length - 2];
+  let deltaHtml = "";
+  if (prev && prev.total > 0) {
+    const pct = (last.total - prev.total) / prev.total * 100;
+    const cls = pct <= 0 ? "good" : "bad";  // 支出下降是好事
+    deltaHtml = `<div class="delta ${cls}">${pct >= 0 ? "+" : ""}${pct.toFixed(1)}% vs ${mLabel(prev)}</div>`;
+  }
+  const avg = months.reduce((s, m) => s + m.total, 0) / months.length;
+  const fixedAct = (D.fixed || []).filter(f => f.active);
+  const fixedMonthly = fixedAct.reduce((s, f) => s + f.monthly, 0);
+  const unnTotal = D.unnecessary.reduce((s, u) => s + u.amount, 0);
+  const matchTotal = D.fda.match
+    ? Object.values(D.fda.match).reduce((a, b) => a + b, 0) : null;
+  const lot = D.lottery || { periods: [], uncovered: 0 };
+  const lotWins = lot.periods.flatMap(p => p.wins);
+  const lotAmt = lotWins.reduce((s, w) => s + w.prizeAmount, 0);
+  const lotN = lot.periods.reduce((s, p) => s + p.nInvoices, 0);
+  const tileDefs = [
+    { label: `本期支出（${mLabel(last)}）`, value: compact(last.total),
+      extra: deltaHtml + `<div class="delta"><a class="map" ` +
+        `href="query.html?from=${last.month}&to=${last.month}">看該月發票</a></div>` },
+    { label: "月均支出", value: compact(avg),
+      extra: `<div class="delta">${months.length} 個月・共 ${D.invoiceCount} 張發票</div>` },
+    { label: "每月固定支出", value: fixedAct.length ? compact(fixedMonthly) : "—",
+      extra: `<div class="delta">${fixedAct.length} 項進行中——` +
+        '<a class="map" href="query.html?view=fixed">在查詢頁檢視</a></div>' },
+    { label: "非必要消費累計", value: compact(unnTotal),
+      extra: `<div class="delta">${D.unnecessary.length} 筆——` +
+        '<a class="map" href="query.html?unnecessary=1">在查詢頁檢視</a></div>' },
+    { label: "FDA 比對命中", value: matchTotal === null ? "—" : matchTotal + " 筆",
+      extra: '<div class="delta">⚠ 命中≠買到問題商品——' +
+        '<a class="map" href="fda.html">明細在食安頁</a></div>' },
+    { label: "統一發票對獎", value: !lot.periods.length ? "—"
+        : lotWins.length ? compact(lotAmt) : "未中獎",
+      extra: `<div class="delta">${!lot.periods.length
+        ? "跑 twcrawl lottery 更新中獎號碼"
+        : lotWins.length ? `🎉 ${lotWins.length} 筆——別忘了領獎`
+        : `近 ${lot.periods.length} 期共 ${lotN} 張參加`}</div>` +
+        (lot.next && lot.next.pending ? `<div class="delta">${
+          lot.next.pending} 張待 ${Number(lot.next.drawDate.slice(5, 7))}/${
+          Number(lot.next.drawDate.slice(8))} 開獎</div>` : "") },
+  ];
+  for (const t of tileDefs) {
+    const tile = el("div", "tile");
+    tile.append(el("div", "label", t.label), el("div", "value", t.value));
+    if (t.extra) tile.insertAdjacentHTML("beforeend", t.extra);
+    tiles.append(tile);
+  }
+  // 資料鮮度：載具發票有幾天延遲屬正常；斷檔兩週以上才提醒跑 update
+  const lastInvDate = D.invoices[D.invoices.length - 1].date;
+  const staleDays = Math.floor(
+    (Date.now() - new Date(lastInvDate + "T00:00:00")) / 864e5);
+  const hd = el("header");
+  hd.innerHTML = '<h1>twcrawl 消費儀表板</h1><div class="sub">' +
+    '<a class="map" href="query.html">🔍 查詢頁（搜尋、店家查詢、固定支出）</a>　' +
+    '<a class="map" href="fda.html">🛡 食安頁（FDA 比對）</a>　' +
+    '<a class="map" href="map.html">🗺 消費地圖（開啟時會載入 OSM 圖磚）</a>　' +
+    `<span>發票到 ${lastInvDate}</span>` +
+    (staleDays > 14 ? `<span style="color:#d03b3b">　⚠ 已 ${staleDays} 天` +
+      "沒有新發票——記得跑 twcrawl update</span>" : "") + "</div>";
+  // 亮暗切換：自動→亮→暗，寫 localStorage；圖表顏色在繪製時取樣，重載最單純
+  const THEMES = [["", "🌗 自動"], ["light", "☀️ 亮"], ["dark", "🌙 暗"]];
+  const curTheme = document.documentElement.dataset.theme || "";
+  const tb = el("button", "theme", THEMES.find(x => x[0] === curTheme)[1]);
+  tb.title = "亮暗主題（自動→亮→暗）";
+  tb.addEventListener("click", () => {
+    const next = THEMES[(THEMES.findIndex(x => x[0] === curTheme) + 1)
+      % THEMES.length][0];
+    if (next) localStorage.setItem("twcrawl-theme", next);
+    else localStorage.removeItem("twcrawl-theme");
+    location.reload();
+  });
+  hd.append(tb);
+  app.append(hd, tiles);
+
+  // ---- 中獎發票（有中才出現；時效資訊，排最前） -------------------------
+  if (lotWins.length) {
+    const lc = el("div", "card");
+    lc.append(el("h2", null,
+      `🎉 中獎發票（${lotWins.length} 筆・共 ${nt(lotAmt)}）`));
+    lc.append(el("div", "desc",
+      "傳統獎項（特別獎～六獎）比對結果；雲端發票專屬獎另以平台歸戶通知為準"));
+    const wrapT = el("div", "scrollx");
+    wrapT.innerHTML = '<table><tr><th>期別</th><th>獎別</th>' +
+      '<th class="num">獎金</th><th>發票號碼</th><th>日期</th><th>店家</th>' +
+      "<th>領獎期限</th></tr>" +
+      lotWins.map(x =>
+        `<tr><td>${x.periodLabel}</td><td>${x.prize}${x.also
+          ? ` <span style="color:var(--muted);font-size:11px">` +
+            `（另符合${x.also}，擇高）</span>` : ""}</td>` +
+        `<td class="num">${nt(x.prizeAmount)}</td>` +
+        `<td><a class="map" href="query.html?q=${x.num}" ` +
+        `title="在查詢頁看這張發票（可展開品項）">${x.num}</a></td>` +
+        `<td>${x.date}</td><td>${x.seller || "—"}</td>` +
+        `<td>${x.claimEnd}</td></tr>`).join("") + "</table>";
+    lc.append(wrapT);
+    app.append(lc);
+  }
+
+  // ---- 月度堆疊柱狀圖 ---------------------------------------------------
+  const mCard = el("div", "card");
+  mCard.append(el("h2", null, "每月支出（依店家分類）"));
+  mCard.append(el("div", "desc",
+    "滑過看明細、點柱子進查詢頁；點圖例看單一分類趨勢，再點一次回全部"));
+  const legend = el("div", "legend");
+  let selCat = null;                 // 點選中的分類；null＝全部堆疊
+  series.forEach((s, i) => {
+    const b = el("button", "leg",
+      `<i class="swatch" style="background:${color(i)}"></i>${s}`);
+    b.addEventListener("click", () => {
+      selCat = selCat === s ? null : s;
+      for (const x of legend.children)
+        x.classList.toggle("sel", selCat !== null && x === b);
+      legend.classList.toggle("picking", selCat !== null);
+      renderMonthly();
+    });
+    legend.append(b);
+  });
+  mCard.append(legend);
+  const chartBox = el("div");
+  mCard.append(chartBox);
+
+  function renderMonthly() {
+    chartBox.innerHTML = "";
+    const W = 1000, H = 300, mT = 24, mB = 26, mL = 58, mR = 8;
+    const iw = W - mL - mR, ih = H - mT - mB;
+    const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}` });
+    const valOf = m => selCat ? (m.by[selCat] || 0) : m.total;
+    const max = Math.max(1, ...months.map(valOf));
+    const step = niceStep(max, 4);
+    const top = Math.ceil(max / step) * step;
+    const y = v => mT + ih - v / top * ih;
+    for (let v = 0; v <= top; v += step) {
+      svg.append(svgEl("line", { x1: mL, x2: W - mR, y1: y(v), y2: y(v),
+        stroke: css(v === 0 ? "--baseline" : "--grid"), "stroke-width": 1 }));
+      const lab = svgEl("text", { x: mL - 8, y: y(v) + 4, "text-anchor": "end",
+        "font-size": 11, fill: css("--muted") });
+      lab.textContent = v.toLocaleString("zh-TW");
+      svg.append(lab);
+    }
+    const band = iw / months.length, bw = Math.min(24, band * 0.55);
+    const selIdx = series.indexOf(selCat);
+    months.forEach((m, mi) => {
+      const cx = mL + band * (mi + 0.5);
+      if (selCat) {
+        const v = m.by[selCat] || 0;
+        if (v > 0) svg.append(svgEl("path", {
+          d: roundedTopRect(cx - bw / 2, y(v), bw, Math.max(y(0) - y(v), 1), 4),
+          fill: color(selIdx),
+        }));
+      } else {
+        let acc = 0;
+        series.forEach((s, si) => {
+          const v = m.by[s] || 0;
+          if (v <= 0) return;
+          const y1 = y(acc + v), y0 = y(acc);
+          // 段與段之間留 2px surface gap；最底段直接貼齊基線
+          const hSeg = Math.max(y0 - y1 - (acc === 0 ? 0 : 2), 1);
+          const isTop = acc + v >= m.total - 0.5;
+          const r = isTop ? 4 : 0;                // 4px 圓角只在資料端（頂端）
+          svg.append(svgEl("path", {
+            d: roundedTopRect(cx - bw / 2, y1, bw, hSeg, r),
+            fill: color(si),
+          }));
+          acc += v;
+        });
+      }
+      const tot = valOf(m);
+      if (tot > 0) {
+        const cap = svgEl("text", { x: cx, y: y(tot) - 6, "text-anchor": "middle",
+          "font-size": 11, fill: css("--text-2") });
+        cap.textContent = Math.round(tot / 1000) >= 10
+          ? (tot / 10000).toFixed(1) + "萬" : Math.round(tot).toLocaleString("zh-TW");
+        svg.append(cap);
+      }
+      const xl = svgEl("text", { x: cx, y: H - 8, "text-anchor": "middle",
+        "font-size": 11.5, fill: css("--muted") });
+      xl.textContent = mLabel(m);
+      svg.append(xl);
+      const hit = svgEl("rect", { x: mL + band * mi, y: mT, width: band, height: ih,
+        fill: "transparent" });
+      hit.addEventListener("mousemove", evt => {
+        if (selCat) {
+          const v = m.by[selCat] || 0;
+          const pct = m.total > 0 ? Math.round(v / m.total * 100) : 0;
+          showTip(evt, `<div class="tt-title">${m.month}・${selCat}</div>` +
+            `<div class="tt-row"><span>金額</span><span class="v">${nt(v)}</span></div>` +
+            `<div class="tt-row"><span>佔當月</span><span class="v">${pct}%</span></div>`);
+          return;
+        }
+        const rows = series.map((s, si) => {
+          const v = m.by[s] || 0;
+          if (v <= 0) return "";
+          return `<div class="tt-row"><span><i class="swatch" style="background:${color(si)}"></i> ${s}</span><span class="v">${nt(v)}</span></div>`;
+        }).join("");
+        showTip(evt, `<div class="tt-title">${m.month}・${nt(m.total)}（${m.count} 張）</div>${rows}`);
+      });
+      hit.addEventListener("mouseleave", hideTip);
+      hit.style.cursor = "pointer";
+      hit.addEventListener("click", () => {
+        const cat = selCat && selCat !== OTHER
+          ? `&cat=${encodeURIComponent(selCat)}` : "";
+        location.href = `query.html?from=${m.month}&to=${m.month}${cat}`;
+      });
+      svg.append(hit);
+    });
+    chartBox.append(svg);
+  }
+  renderMonthly();
+
+  const mTable = el("details");
+  mTable.append(el("summary", null, "以表格檢視"));
+  const mtWrap = el("div", "scrollx");
+  mtWrap.innerHTML = "<table><tr><th>月份</th>" +
+    series.map(s => `<th class="num">${s}</th>`).join("") + '<th class="num">合計</th></tr>' +
+    months.map(m => `<tr><td>${m.month}</td>` +
+      series.map(s => `<td class="num">${Math.round(m.by[s] || 0).toLocaleString("zh-TW")}</td>`).join("") +
+      `<td class="num">${Math.round(m.total).toLocaleString("zh-TW")}</td></tr>`).join("") +
+    "</table>";
+  mTable.append(mtWrap);
+  mCard.append(mTable);
+  app.append(mCard);
+
+  // ---- 消費日曆（每日熱力格，GitHub contributions 風；週一為首） --------
+  // 顏色是 magnitude 工作：單一色相（--s1）以透明度分階，不占分類色槽；
+  // 分階切在非零日金額的四分位數，避免單日大額把整片壓淡
+  {
+    const calCard = el("div", "card");
+    calCard.append(el("h2", null, "消費日曆"));
+    calCard.append(el("div", "desc",
+      "一天一格、顏色深＝當日花得多（非零日四分位分階）；" +
+      "滑過看金額筆數、點格子到查詢頁看該日發票"));
+    const byDate = {};
+    for (const v of D.invoices) {
+      (byDate[v.date] ||= { total: 0, count: 0 });
+      byDate[v.date].total += v.amount;
+      byDate[v.date].count += 1;
+    }
+    const dsAll = Object.keys(byDate).sort();
+    const d0 = new Date(dsAll[0] + "T00:00:00");
+    const d1 = new Date(dsAll[dsAll.length - 1] + "T00:00:00");
+    const start = new Date(d0);
+    start.setDate(start.getDate() - (start.getDay() + 6) % 7);  // 回推至週一
+    const nz = dsAll.map(d => byDate[d].total).sort((a, b) => a - b);
+    const qv = p => nz[Math.min(nz.length - 1, Math.floor(p * nz.length))];
+    const t1 = qv(0.25), t2 = qv(0.5), t3 = qv(0.75);
+    const level = v => v <= 0 ? 0 : v <= t1 ? 1 : v <= t2 ? 2 : v <= t3 ? 3 : 4;
+    const OP = [0.35, 0.25, 0.45, 0.7, 1];   // 階 0 用 --grid，1–4 用 --s1
+    const CELL = 12, GAP = 2, PITCH = CELL + GAP, mL = 26, mT = 18;
+    const days = [];
+    for (let d = new Date(start); d <= d1; d.setDate(d.getDate() + 1)) {
+      days.push(new Date(d));
+    }
+    const weeks = Math.ceil(days.length / 7);
+    const W = mL + weeks * PITCH, H = mT + 7 * PITCH + 26;
+    const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}` });
+    const mutedC = css("--muted"), gridC = css("--grid"), s1C = css("--s1");
+    [["一", 0], ["三", 2], ["五", 4], ["日", 6]].forEach(([lbl, r]) => {
+      const t = svgEl("text", { x: mL - 6, y: mT + r * PITCH + CELL - 2.5,
+        "text-anchor": "end", "font-size": 9, fill: mutedC });
+      t.textContent = lbl;
+      svg.append(t);
+    });
+    const iso = d => `${d.getFullYear()}-` +
+      `${String(d.getMonth() + 1).padStart(2, "0")}-` +
+      `${String(d.getDate()).padStart(2, "0")}`;
+    const WK = "日一二三四五六";
+    let lastMonth = "";
+    days.forEach((d, i) => {
+      const col = Math.floor(i / 7), row = (d.getDay() + 6) % 7;
+      if (d.getDate() === 1 || i === 0) {
+        const md = i === 0 ? d0 : d;    // 首欄可能是回推的前月格，標資料起始月
+        const lbl = years.size > 1
+          ? `${String(md.getFullYear()).slice(2)}/${md.getMonth() + 1}`
+          : `${md.getMonth() + 1}月`;
+        if (lbl !== lastMonth) {
+          const t = svgEl("text", { x: mL + col * PITCH, y: mT - 6,
+            "font-size": 9, fill: mutedC });
+          t.textContent = lbl;
+          svg.append(t);
+          lastMonth = lbl;
+        }
+      }
+      if (d < d0 || d > d1) return;     // 首週補齊的前月格不畫
+      const key = iso(d);
+      const rec = byDate[key], v = rec ? rec.total : 0, lv = level(v);
+      const rect = svgEl("rect", { x: mL + col * PITCH, y: mT + row * PITCH,
+        width: CELL, height: CELL, rx: 2,
+        fill: lv === 0 ? gridC : s1C, "fill-opacity": OP[lv] });
+      rect.style.cursor = "pointer";
+      const mon = key.slice(0, 7);
+      const mRec = D.months.find(x => x.month === mon);
+      const daysInM = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+      const avgD = mRec ? mRec.total / daysInM : 0;
+      rect.addEventListener("mousemove", evt => showTip(evt,
+        `<div class="tt-title">${key}（週${WK[d.getDay()]}）</div>` +
+        `<div class="tt-row"><span>金額</span><span class="v">${
+          rec ? nt(v) : "—"}</span></div>` +
+        (rec ? `<div class="tt-row"><span>筆數</span><span class="v">${
+          rec.count} 張</span></div>` : "") +
+        (avgD ? `<div class="tt-row"><span>當月日均</span><span class="v">${
+          nt(avgD)}</span></div>` : "")));
+      rect.addEventListener("mouseleave", hideTip);
+      rect.addEventListener("click", () => {
+        location.href = "query.html?q=" + key;   // q 也比對日期（單日篩選）
+      });
+      svg.append(rect);
+    });
+    const lgY = mT + 7 * PITCH + 12, lgX = W - 5 * PITCH - 34;
+    const lgA = svgEl("text", { x: lgX - 6, y: lgY + CELL - 3,
+      "text-anchor": "end", "font-size": 9, fill: mutedC });
+    lgA.textContent = "少";
+    svg.append(lgA);
+    for (let lv = 0; lv <= 4; lv++) {
+      svg.append(svgEl("rect", { x: lgX + lv * PITCH, y: lgY,
+        width: CELL, height: CELL, rx: 2,
+        fill: lv === 0 ? gridC : s1C, "fill-opacity": OP[lv] }));
+    }
+    const lgB = svgEl("text", { x: lgX + 5 * PITCH + 4, y: lgY + CELL - 3,
+      "font-size": 9, fill: mutedC });
+    lgB.textContent = "多";
+    svg.append(lgB);
+    calCard.append(svg);
+
+    // 表格檢視（照月度圖慣例）：月 × 星期合計
+    const byMonWk = {};
+    for (const ds of dsAll) {
+      const d = new Date(ds + "T00:00:00");
+      const mon = ds.slice(0, 7), wd = (d.getDay() + 6) % 7;
+      (byMonWk[mon] ||= Array(7).fill(0))[wd] += byDate[ds].total;
+    }
+    const cTable = el("details");
+    cTable.append(el("summary", null, "以表格檢視"));
+    const ctWrap = el("div", "scrollx");
+    ctWrap.innerHTML = "<table><tr><th>月份</th>" +
+      [..."一二三四五六日"].map(w => `<th class="num">${w}</th>`).join("") +
+      "</tr>" +
+      Object.keys(byMonWk).sort().map(mon =>
+        `<tr><td>${mon}</td>` + byMonWk[mon].map(x =>
+          `<td class="num">${x ? Math.round(x).toLocaleString("zh-TW") : "—"}</td>`
+        ).join("") + "</tr>").join("") +
+      "</table>";
+    cTable.append(ctWrap);
+    calCard.append(cTable);
+    app.append(calCard);
+  }
+
+  // ---- 分類累計 × 店家排行 ----------------------------------------------
+  const cols = el("div", "cols");
+  cols.append(hbarCard(
+    "分類累計", "全期間各分類總支出；非必要分類以 ⚠ 標示；點列到查詢頁篩選",
+    D.categories.map(c => ({
+      label: (c.unnecessary ? "⚠ " : "") + c.name,
+      value: c.total, count: c.count,
+      q: "query.html?cat=" + encodeURIComponent(c.name),
+      color: c.name === "未分類" ? css("--other")
+        : topCats.includes(c.name) ? color(topCats.indexOf(c.name)) : css("--other"),
+    }))));
+  cols.append(hbarCard(
+    "店家排行（前 10）", "全期間消費金額最高的店家；點列到查詢頁鑽取",
+    D.sellers.slice(0, 10).map(s => ({
+      label: s.name, value: s.total, count: s.count, color: css("--s1"),
+      sub: s.category, map: true, legal: s.legal, industry: s.industry,
+      address: s.address, topItems: s.topItems,
+      q: "query.html?seller=" + encodeURIComponent(s.name),
+    }))));
+  app.append(cols);
+
+  function hbarCard(title, desc, rows) {
+    const card = el("div", "card");
+    card.append(el("h2", null, title), el("div", "desc", desc));
+    const W = 520, rowH = 30, mL2 = 4, mR2 = 110;
+    const H2 = rows.length * rowH + 4;
+    const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H2}` });
+    const max = Math.max(...rows.map(r => r.value));
+    rows.forEach((r, i) => {
+      const yTop = i * rowH;
+      const barW = Math.max(r.value / max * (W - mL2 - mR2), 2);
+      const lab = svgEl("text", { x: mL2, y: yTop + 12, "font-size": 12,
+        fill: css("--text-1") });
+      lab.textContent = r.label.length > 18 ? r.label.slice(0, 17) + "…" : r.label;
+      svg.append(lab);
+      svg.append(svgEl("path", {
+        d: roundedRightRect(mL2, yTop + 17, barW, 8, 4), fill: r.color }));
+      const val = svgEl("text", { x: mL2 + barW + 8, y: yTop + 25, "font-size": 11,
+        fill: css("--muted"), "font-variant-numeric": "tabular-nums" });
+      val.textContent = Math.round(r.value).toLocaleString("zh-TW");
+      svg.append(val);
+      if (r.map) {
+        const a = svgEl("a", { href: mapsUrl(r.label, r.address), target: "_blank",
+          rel: "noopener" });
+        const at = svgEl("text", { x: W - 4, y: yTop + 12, "text-anchor": "end",
+          "font-size": 11, fill: css("--s1") });
+        at.textContent = "地圖";
+        a.append(at);
+        svg.append(a);
+      }
+      const hit = svgEl("rect", { x: 0, y: yTop, width: W, height: rowH,
+        fill: "transparent" });
+      hit.addEventListener("mousemove", evt => showTip(evt,
+        `<div class="tt-title">${r.label}</div>` +
+        (r.legal ? `<div class="tt-row"><span>公司名</span><span class="v">${r.legal}</span></div>` : "") +
+        (r.sub ? `<div class="tt-row"><span>分類</span><span class="v">${r.sub}</span></div>` : "") +
+        (r.industry ? `<div class="tt-row"><span>稅籍行業</span><span class="v">${r.industry}</span></div>` : "") +
+        `<div class="tt-row"><span>金額</span><span class="v">${nt(r.value)}</span></div>` +
+        `<div class="tt-row"><span>筆數</span><span class="v">${r.count}</span></div>` +
+        (r.topItems && r.topItems.length
+          ? `<div class="tt-row"><span>常買</span><span class="v">${r.topItems.join("、")}</span></div>` : "") +
+        (r.address ? `<div class="tt-row"><span>地址</span><span class="v">${r.address}</span></div>` : "")));
+      hit.addEventListener("mouseleave", hideTip);
+      if (r.q) {
+        hit.style.cursor = "pointer";
+        hit.addEventListener("click", () => { location.href = r.q; });
+      }
+      svg.append(hit);
+    });
+    card.append(svg);
+    return card;
+  }
+
+  // ---- 非必要消費 -------------------------------------------------------
+  const unn = el("div", "card");
+  unn.append(el("h2", null, `非必要消費（${D.unnecessary.length} 筆・${nt(unnTotal)}）`));
+  unn.append(el("div", "desc",
+    "判準掛在店家分類（預設：手搖飲、甜點零食、咖啡）——超市裡買的零食抓不到；" +
+    "要改判準就編輯 categories.local.json 的 unnecessary 欄位——" +
+    '<a class="map" href="query.html?unnecessary=1">在查詢頁篩選檢視</a>'));
+  if (D.unnecessary.length) {
+    const recent = D.unnecessary.slice(0, 10);   // 全量會逐年變長，月報只留近期
+    const wrapT = el("div", "scrollx");
+    wrapT.innerHTML = "<table><tr><th>日期</th><th>店家</th><th>分類</th>" +
+      '<th class="num">金額</th><th></th></tr>' +
+      recent.map(u =>
+        `<tr><td>${u.date}</td><td>${u.seller}</td><td>${u.category}</td>` +
+        `<td class="num">${Math.round(u.amount).toLocaleString("zh-TW")}</td>` +
+        `<td>${mapA(u.seller)}</td></tr>`).join("") +
+      "</table>";
+    unn.append(wrapT);
+    if (D.unnecessary.length > recent.length) {
+      unn.append(el("div", "note",
+        `僅列近期 ${recent.length} 筆——` +
+        `<a class="map" href="query.html?unnecessary=1">全部 ${D.unnecessary.length} 筆在查詢頁</a>`));
+    }
+  } else {
+    unn.append(el("div", "note", "這段期間沒有非必要分類的消費。"));
+  }
+  app.append(unn);
+
+  // ---- 未分類店家（歸類：serve 存檔／file:// 複製片段） ------------------
+  if (D.uncategorized.length) {
+    const uc = el("div", "card");
+    uc.append(el("h2", null, "未分類店家（金額前 " + D.uncategorized.length + " 名）"));
+    uc.append(el("div", "desc", SERVE
+      ? "「查這家」看該店逐張發票與品項再判斷；填分類（招牌名選填——" +
+        "登記名≠招牌時填，之後全站都顯示招牌名）按「存檔」直接寫回 " +
+        "categories.local.json 並重生資料；整理完重新整理（F5）看結果"
+      : "「查這家」看該店逐張發票與品項再判斷；填分類按「複製」取得規則" +
+        "片段，貼進 categories.local.json 後重跑 twcrawl export；或改用 " +
+        "<code>twcrawl serve</code> 在頁面上直接存檔（並可填招牌名）"));
+    const wrapT = el("div", "scrollx");
+    wrapT.innerHTML = '<datalist id="cats">' +
+      D.categories.filter(c => c.name !== "未分類")
+        .map(c => `<option value="${c.name}">`).join("") + "</datalist>" +
+      '<table><tr><th>店家</th><th>稅籍行業</th><th>常買品項</th>' +
+      '<th class="num">金額</th><th class="num">筆數</th><th>分類</th>' +
+      (SERVE ? "<th>招牌名</th>" : "") + "<th></th><th></th></tr>" +
+      D.uncategorized.map((s, i) =>
+        `<tr><td>${s.name}<div><a class="map" href="query.html?seller=${
+          encodeURIComponent(s.name)}">查這家</a></div></td>` +
+        `<td>${s.industry || "—"}</td>` +
+        `<td>${(s.topItems || []).slice(0, 2).join("、") || "—"}</td>` +
+        `<td class="num">${Math.round(s.total).toLocaleString("zh-TW")}</td>` +
+        `<td class="num">${s.count}</td>` +
+        `<td><input class="catin" data-i="${i}" list="cats" placeholder="分類"></td>` +
+        (SERVE ? `<td><input class="aliin" data-i="${i}" size="12"` +
+          ' placeholder="招牌名（選填）"></td>' : "") +
+        `<td><button class="rule" data-i="${i}">${SERVE ? "存檔" : "複製"}</button></td>` +
+        `<td>${mapA(s.name, s.address)}</td></tr>`).join("") +
+      "</table>";
+    wrapT.querySelectorAll("button.rule").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const s = D.uncategorized[+btn.dataset.i];
+        const cat = (wrapT.querySelector(`input.catin[data-i="${btn.dataset.i}"]`)
+          .value || "").trim();
+        const aliEl = wrapT.querySelector(`input.aliin[data-i="${btn.dataset.i}"]`);
+        const ali = aliEl ? aliEl.value.trim() : "";
+        const name = s.legal || s.name;   // 規則比對的是公司登記名
+        if (SERVE) {
+          if (!cat && !ali) { btn.textContent = "填分類或招牌名"; return; }
+          btn.textContent = "存檔中…";
+          const ok = await saveRules(cat ? { [name]: cat } : {},
+                                     ali ? { [name]: ali } : {});
+          btn.textContent = ok ? "✓ 已寫回" : "失敗（看主控台）";
+          if (ok) {
+            noteSaved(1);
+            btn.closest("tr").style.opacity = "0.45";   // 已處理的列淡出
+          }
+        } else {
+          if (!cat) { btn.textContent = "先填分類"; return; }
+          btn.textContent = (await copyText(`"${name}": "${cat}",`))
+            ? "✓ 已複製" : "複製失敗";
+        }
+      });
+    });
+    uc.append(wrapT);
+    app.append(uc);
+  }
+
+  const foot = el("div", "note",
+    `資料截至 ${D.generatedAt} 由 twcrawl export 產生・全部在本機、不自動外連、` +
+    "不上雲（docs/adr/0001）・「地圖」連結點擊時才會把店名帶去 Google 搜尋");
+  app.append(foot);
+
+  // ---- 幾何小工具 -------------------------------------------------------
+  function niceStep(max, ticks) {
+    const raw = max / ticks, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    for (const m of [1, 2, 2.5, 5, 10]) if (raw <= m * mag) return m * mag;
+    return 10 * mag;
+  }
+  function roundedTopRect(x, y, w, h, r) {
+    r = Math.min(r, h, w / 2);
+    return `M${x},${y + h} L${x},${y + r} Q${x},${y} ${x + r},${y}` +
+           ` L${x + w - r},${y} Q${x + w},${y} ${x + w},${y + r} L${x + w},${y + h} Z`;
+  }
+  function roundedRightRect(x, y, w, h, r) {
+    r = Math.min(r, w, h / 2);
+    return `M${x},${y} L${x + w - r},${y} Q${x + w},${y} ${x + w},${y + r}` +
+           ` L${x + w},${y + h - r} Q${x + w},${y + h} ${x + w - r},${y + h} L${x},${y + h} Z`;
+  }
+})();
+</script>
+</body>
+</html>

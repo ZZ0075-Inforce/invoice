@@ -1,0 +1,22 @@
+# 機敏資料 — 絕對不要進版控
+.secrets/
+state/
+captures/
+categories.local.json
+*.sqlite
+*.sqlite-journal
+*.db
+config.toml
+
+# 輸出
+out/
+*.csv
+!docs/**/*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/

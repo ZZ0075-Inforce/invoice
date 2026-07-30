@@ -1,0 +1,805 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>twcrawl 查詢頁</title>
+<script>(function () {
+  var t = localStorage.getItem("twcrawl-theme");
+  if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+})();</script>
+<style>
+  :root {
+    color-scheme: light;
+    --page:        #f9f9f7;
+    --surface-1:   #fcfcfb;
+    --text-1:      #0b0b0b;
+    --text-2:      #52514e;
+    --muted:       #898781;
+    --grid:        #e1e0d9;
+    --baseline:    #c3c2b7;
+    --border:      rgba(11,11,11,0.10);
+    --up-good:     #006300;
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;
+    --s4: #eda100; --s5: #e87ba4; --s6: #008300;
+    --other: #898781;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page:      #0d0d0d;
+      --surface-1: #1a1a19;
+      --text-1:    #ffffff;
+      --text-2:    #c3c2b7;
+      --muted:     #898781;
+      --grid:      #2c2c2a;
+      --baseline:  #383835;
+      --border:    rgba(255,255,255,0.10);
+      --up-good:   #0ca30c;
+      --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+      --s4: #c98500; --s5: #d55181; --s6: #008300;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page:      #0d0d0d;
+    --surface-1: #1a1a19;
+    --text-1:    #ffffff;
+    --text-2:    #c3c2b7;
+    --muted:     #898781;
+    --grid:      #2c2c2a;
+    --baseline:  #383835;
+    --border:    rgba(255,255,255,0.10);
+    --up-good:   #0ca30c;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+    --s4: #c98500; --s5: #d55181; --s6: #008300;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page); color: var(--text-1);
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif;
+    font-size: 14px; line-height: 1.5; padding: 24px 16px 48px;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; }
+  header { margin-bottom: 16px; position: relative; }
+  button.theme { position: absolute; top: 0; right: 0;
+                 border: 1px solid var(--border); background: var(--surface-1);
+                 color: var(--text-2); border-radius: 999px; padding: 3px 12px;
+                 cursor: pointer; font: inherit; font-size: 12px; }
+  h1 { font-size: 20px; font-weight: 650; }
+  .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  h2 { font-size: 14.5px; font-weight: 650; margin-bottom: 2px; }
+  .desc { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 18px; margin-bottom: 16px;
+  }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+           gap: 12px; margin-bottom: 16px; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border);
+          border-radius: 10px; padding: 14px 16px; }
+  .tile .label { color: var(--text-2); font-size: 12.5px; }
+  .tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; }
+  .tile .delta { font-size: 12px; margin-top: 2px; color: var(--text-2); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .chip {
+    border: 1px solid var(--border); background: var(--surface-1);
+    color: var(--text-2); border-radius: 999px; padding: 4px 14px;
+    font-size: 13px; cursor: pointer; font-family: inherit;
+  }
+  .chip.on { border-color: var(--s1); color: var(--s1); font-weight: 650; }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center;
+             font-size: 12.5px; color: var(--text-2); }
+  .filters label { display: inline-flex; gap: 5px; align-items: center; }
+  .filters input, .filters select {
+    border: 1px solid var(--border); background: var(--surface-1);
+    color: var(--text-1); border-radius: 6px; padding: 3px 8px; font: inherit;
+  }
+  .filters input[type="search"] { width: 220px; }
+  .filters input[type="number"] { width: 90px; }
+  .stat { color: var(--muted); font-size: 12.5px; margin: 10px 0 6px; }
+  .scrollx { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px;
+       border-bottom: 1px solid var(--grid); padding: 4px 10px 4px 0; }
+  td { border-bottom: 1px solid var(--grid); padding: 5px 10px 5px 0;
+       vertical-align: top; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.inv { cursor: pointer; }
+  tr.inv:hover td { background: color-mix(in srgb, var(--grid) 35%, transparent); }
+  tr.items-row > td { padding: 0 0 10px 18px; border-bottom: 1px solid var(--grid); }
+  tr.items-row table { font-size: 12.5px; width: auto; min-width: 60%; }
+  tr.items-row td, tr.items-row th { border-bottom: 1px dashed var(--grid); }
+  .empty { padding: 40px; text-align: center; color: var(--text-2); }
+  code { background: var(--grid); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+  a.map, .linkish { color: var(--s1); text-decoration: none; font-size: inherit;
+                    cursor: pointer; background: none; border: 0; padding: 0;
+                    font-family: inherit; }
+  a.fda-mark { text-decoration: none; font-size: 12px; }
+  .lot-mark { font-size: 12px; cursor: help; }
+  a.map:hover, .linkish:hover { text-decoration: underline; }
+  .more { margin-top: 10px; }
+  #savebar { position: fixed; left: 50%; transform: translateX(-50%);
+             bottom: 18px; z-index: 20; background: var(--surface-1);
+             border: 1px solid var(--border); border-radius: 999px;
+             padding: 8px 18px; box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+             font-size: 13px; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .ok   { color: var(--up-good); }
+  .off  { color: var(--muted); }
+  svg { display: block; width: 100%; height: auto; }
+  svg text { font-family: inherit; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="empty">
+  找不到資料（data.js）。<br><br>
+  請開 <b><code>out\query.html</code></b>——<code>twcrawl export</code> 會把模板與
+  data.js 一起放在那裡。
+</div></div>
+<script src="data.js"></script>
+<script>
+(function () {
+  const D = window.TWCRAWL_DATA;
+  if (!D || !D.invoices || !D.invoices.length) return;
+
+  const app = document.getElementById("app");
+  app.innerHTML = "";
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const nt = x => "NT$" + Math.round(x).toLocaleString("zh-TW");
+  const esc = s => String(s).replace(/[&<>"]/g,
+    ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]));
+  const el = (tag, cls, html) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (html !== undefined) e.innerHTML = html;
+    return e;
+  };
+  const qty = v => v == null ? "—"
+    : (Math.round(v * 100) / 100).toString().replace(/\.0+$/, "");
+
+  // ---- 同頁雙模式（ADR-0002）：serve 可寫回，file:// 提供複製 -----------
+  const SERVE = location.protocol.startsWith("http");
+  async function saveRules(set, aliases) {
+    try {
+      const r = await fetch("/api/rules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ set, aliases }),
+      });
+      const j = await r.json();
+      if (!j.ok) console.error("寫回失敗：" + j.error);
+      return !!j.ok;
+    } catch (e) { console.error(e); return false; }
+  }
+  async function copyText(t) {
+    try { await navigator.clipboard.writeText(t); return true; }
+    catch (_e) {
+      const ta = document.createElement("textarea");
+      ta.value = t; document.body.append(ta); ta.select();
+      const ok = document.execCommand("copy"); ta.remove(); return ok;
+    }
+  }
+  function themeButton() {
+    const THEMES = [["", "🌗 自動"], ["light", "☀️ 亮"], ["dark", "🌙 暗"]];
+    const cur = document.documentElement.dataset.theme || "";
+    const tb = el("button", "theme", THEMES.find(x => x[0] === cur)[1]);
+    tb.title = "亮暗主題（自動→亮→暗）";
+    tb.addEventListener("click", () => {
+      const next = THEMES[(THEMES.findIndex(x => x[0] === cur) + 1)
+        % THEMES.length][0];
+      if (next) localStorage.setItem("twcrawl-theme", next);
+      else localStorage.removeItem("twcrawl-theme");
+      location.reload();   // 圖表顏色在繪製時取樣，重載最單純
+    });
+    return tb;
+  }
+
+  let savedN = 0;   // 存檔浮動提示：累計寫回筆數，提醒重新整理看重算結果
+  function noteSaved(n) {
+    savedN += n;
+    let bar = document.getElementById("savebar");
+    if (!bar) { bar = el("div"); bar.id = "savebar"; document.body.append(bar); }
+    bar.innerHTML = `已寫回 ${savedN} 筆規則，資料已重生——` +
+      '<button class="linkish" id="reloadbtn">重新整理看結果</button>';
+    bar.querySelector("#reloadbtn")
+      .addEventListener("click", () => location.reload());
+  }
+
+  const hasItems = D.invoices.some(v => Array.isArray(v.items));
+  const meta = {};                       // display name → seller 靜態資訊
+  for (const s of D.sellers || []) meta[s.name] = s;
+
+  // FDA 命中對照：發票號碼 → 命中列（查詢頁在明細層級標 ⚠ 連食安頁）
+  const matchesByNum = {};
+  for (const m of (D.fda && D.fda.matches) || []) {
+    if (m.num) (matchesByNum[m.num] ||= []).push(m);
+  }
+  function fdaMark(v) {
+    const ms = matchesByNum[v.num];
+    if (!ms) return "";
+    const src = ms[0].source || "";
+    const title = `FDA 命中 ${ms.length} 筆（` +
+      [...new Set(ms.map(m => m.level))].join("、") +
+      "）——命中≠買到問題商品，點看食安頁";
+    return ` <a class="fda-mark" href="fda.html${
+      src ? "?src=" + encodeURIComponent(src) : ""}" title="${esc(title)}">⚠</a>`;
+  }
+  // 對獎中獎對照：發票號碼 → 中獎資訊（列上標 🎉，滑過看獎別與領獎期限）
+  const lotWinByNum = {};
+  for (const p of (D.lottery && D.lottery.periods) || []) {
+    for (const w of p.wins) lotWinByNum[w.num] = w;
+  }
+  function lotMark(v) {
+    const w = lotWinByNum[v.num];
+    return w ? ` <span class="lot-mark" title="${esc(
+      `${w.prize} ${nt(w.prizeAmount)}（${w.periodLabel}，領獎至 ${w.claimEnd}）`
+      + (w.also ? `；另符合${w.also}，擇高` : "")
+    )}">🎉</span>` : "";
+  }
+  const unnecessarySet = new Set(
+    (D.categories || []).filter(c => c.unnecessary).map(c => c.name));
+  const dates = D.invoices.map(v => v.date).sort();
+  const minM = dates[0].slice(0, 7), maxM = dates[dates.length - 1].slice(0, 7);
+
+  // ---- 版頭與視圖切換 ---------------------------------------------------
+  const hd = el("header");
+  hd.innerHTML = "<h1>twcrawl 查詢頁</h1>" +
+    '<div class="sub"><a class="map" href="dashboard.html">← 回儀表板</a>　' +
+    '<a class="map" href="fda.html">🛡 食安頁</a>　' +
+    '<a class="map" href="map.html">🗺 消費地圖</a></div>';
+  hd.append(themeButton());
+  app.append(hd);
+
+  const VIEWS = [["list", "發票清單"], ["seller", "店家查詢"], ["fixed", "固定支出"]];
+  const chips = el("div", "chips");
+  for (const [key, label] of VIEWS) {
+    const b = el("button", "chip", label);
+    b.dataset.view = key;
+    b.addEventListener("click", () => show(key));
+    chips.append(b);
+  }
+  app.append(chips);
+  const body = el("div");
+  app.append(body);
+
+  const foot = el("div", "note",
+    `資料截至 ${esc(D.generatedAt || "")}・全部在本機運算、不外連（docs/adr/0002）・` +
+    "品項與發票號碼只存在本機 data.js");
+  app.append(foot);
+
+  // ---- URL 深連結（雙向：讀進來，狀態變了也寫回去，F5 不歸零） ----------
+  const P = new URLSearchParams(location.search);
+  const initView = P.get("seller") ? "seller" : (P.get("view") || "list");
+  function syncUrl(view) {
+    try {   // file:// 下部分瀏覽器不允許 replaceState，失敗就靜默略過
+      const qs = new URLSearchParams(P);
+      if (view === "list") qs.delete("view"); else qs.set("view", view);
+      if (view !== "seller") qs.delete("seller");
+      const s = qs.toString();
+      history.replaceState(null, "", location.pathname + (s ? "?" + s : ""));
+    } catch (_e) {}
+  }
+
+  // ---- 發票清單視圖 -----------------------------------------------------
+  let F;                                  // 篩選狀態（DOM 即狀態）
+  function listView() {
+    const card = el("div", "card");
+    card.append(el("h2", null, "搜尋與篩選"));
+    card.append(el("div", "desc",
+      "關鍵字比對店家（含公司名）、品名、發票號碼、日期（如 2026-04-26）；" +
+      "條件之間是 AND"));
+    const f = el("div", "filters");
+    f.innerHTML =
+      `<input type="search" id="q" placeholder="店家／品名／發票號碼／日期">` +
+      `<label>月份 <input type="month" id="from" min="${minM}" max="${maxM}"> ～ ` +
+      `<input type="month" id="to" min="${minM}" max="${maxM}"></label>` +
+      `<label>分類 <select id="cat"><option value="">全部</option>` +
+      (D.categories || []).map(c =>
+        `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("") +
+      `</select></label>` +
+      `<label>金額 <input type="number" id="amin" placeholder="最低"> ～ ` +
+      `<input type="number" id="amax" placeholder="最高"></label>` +
+      `<label><input type="checkbox" id="unn"> 只看非必要</label>`;
+    card.append(f);
+    const stat = el("div", "stat");
+    stat.style.display = "flex";
+    stat.style.justifyContent = "space-between";
+    stat.style.gap = "12px";
+    const statTxt = el("span");
+    const csvBtn = el("button", "linkish", "另存 CSV");
+    csvBtn.title = "匯出目前篩選結果（UTF-8 BOM，Excel 可直開）";
+    stat.append(statTxt, csvBtn);
+    const wrapT = el("div", "scrollx");
+    const more = el("div", "more");
+    card.append(stat, wrapT, more);
+    body.append(card);
+    if (!hasItems) card.append(el("div", "note",
+      "！data.js 是舊版（沒有品項）——重跑 twcrawl export 即補齊。"));
+
+    F = { q: f.querySelector("#q"), from: f.querySelector("#from"),
+          to: f.querySelector("#to"), cat: f.querySelector("#cat"),
+          amin: f.querySelector("#amin"), amax: f.querySelector("#amax"),
+          unn: f.querySelector("#unn") };
+    F.q.value = P.get("q") || "";
+    F.from.value = P.get("from") || "";
+    F.to.value = P.get("to") || "";
+    if (P.get("cat")) F.cat.value = P.get("cat");
+    F.amin.value = P.get("amin") || "";
+    F.amax.value = P.get("amax") || "";
+    F.unn.checked = P.get("unnecessary") === "1";
+    for (const k in F) F[k].addEventListener(
+      F[k].type === "search" ? "input" : "change", renderList);
+
+    let shown = 200;
+    const sort = { key: "date", dir: -1 };   // 預設最新在前
+    function filtered() {
+      const q = F.q.value.trim().toLowerCase();
+      const from = F.from.value ? F.from.value + "-01" : "";
+      const to = F.to.value ? F.to.value + "-31" : "";
+      const amin = F.amin.value === "" ? null : Number(F.amin.value);
+      const amax = F.amax.value === "" ? null : Number(F.amax.value);
+      return D.invoices.filter(v => {
+        if (from && v.date < from) return false;
+        if (to && v.date > to) return false;
+        if (F.cat.value && v.category !== F.cat.value) return false;
+        if (F.unn.checked && !unnecessarySet.has(v.category)) return false;
+        if (amin != null && v.amount < amin) return false;
+        if (amax != null && v.amount > amax) return false;
+        if (q) {
+          const m = meta[v.seller];
+          const hay = [v.seller, m && m.legal, v.num, v.date,
+            ...(v.items || []).map(i => i.desc)]
+            .filter(Boolean).join("\n").toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      });
+    }
+    function renderList() {
+      shown = 200;
+      for (const [key, val] of [["q", F.q.value.trim()],
+        ["from", F.from.value], ["to", F.to.value], ["cat", F.cat.value],
+        ["amin", F.amin.value], ["amax", F.amax.value],
+        ["unnecessary", F.unn.checked ? "1" : ""]]) {
+        if (val) P.set(key, val); else P.delete(key);
+      }
+      syncUrl("list");
+      paint();
+    }
+    function paint() {
+      const rows = filtered().sort((a, b) => {
+        const [va, vb] = sort.key === "amount"
+          ? [a.amount, b.amount] : [a.date, b.date];
+        return (va < vb ? -1 : va > vb ? 1 : 0) * sort.dir;
+      });
+      const sum = rows.reduce((s, v) => s + v.amount, 0);
+      statTxt.textContent = `${rows.length} 張發票・${nt(sum)}` +
+        (rows.length > shown ? `・先列前 ${shown} 張` : "");
+      csvBtn.onclick = () => exportCsv(rows);
+      const arrow = k => sort.key === k ? (sort.dir < 0 ? " ▼" : " ▲") : "";
+      wrapT.innerHTML = "<table><tr>" +
+        `<th class="sortable" data-k="date" title="點擊排序">日期${arrow("date")}</th>` +
+        "<th>店家</th><th>分類</th>" +
+        `<th class="num sortable" data-k="amount" title="點擊排序">金額${arrow("amount")}</th>` +
+        "<th>發票號碼</th></tr>" +
+        rows.slice(0, shown).map((v, i) =>
+          `<tr class="inv" data-i="${i}"><td>${v.date}</td>` +
+          `<td${(meta[v.seller] || {}).legal
+            ? ` title="登記名：${esc(meta[v.seller].legal)}"` : ""}>${
+            esc(v.seller || "（無店名）")}</td><td>${esc(v.category)}</td>` +
+          `<td class="num">${Math.round(v.amount).toLocaleString("zh-TW")}</td>` +
+          `<td>${esc(v.num || "—")}${fdaMark(v)}${lotMark(v)}</td></tr>`).join("") +
+        "</table>";
+      wrapT.querySelectorAll("th.sortable").forEach(th => {
+        th.style.cursor = "pointer";
+        th.addEventListener("click", () => {
+          if (sort.key === th.dataset.k) sort.dir = -sort.dir;
+          else { sort.key = th.dataset.k; sort.dir = -1; }
+          paint();
+        });
+      });
+      const visible = rows.slice(0, shown);
+      wrapT.querySelectorAll("tr.inv").forEach(tr => {
+        tr.addEventListener("click", evt => {
+          if (evt.target.closest("a")) return;   // ⚠ 連結不觸發展開
+          toggleItems(tr, visible[+tr.dataset.i]);
+        });
+      });
+      more.innerHTML = "";
+      if (rows.length > shown) {
+        const b = el("button", "chip", `顯示更多（還有 ${rows.length - shown} 張）`);
+        b.addEventListener("click", () => { shown += 200; paint(); });
+        more.append(b);
+      }
+    }
+    paint();
+    if (!location.search) F.q.focus();   // 乾淨進頁時直接可打字搜尋
+  }
+
+  function exportCsv(rows) {
+    // 一列一發票；品項以「、」串接。存進使用者下載夾（本機，使用者主動觸發）
+    const cell = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const lines = [["日期", "店家", "分類", "金額", "發票號碼", "品項"]
+      .map(cell).join(",")];
+    for (const v of rows) {
+      lines.push([v.date, v.seller, v.category, Math.round(v.amount),
+        v.num || "", (v.items || []).map(i => i.desc).filter(Boolean).join("、")]
+        .map(cell).join(","));
+    }
+    const blob = new Blob([String.fromCharCode(0xFEFF) + lines.join("\r\n")],
+      { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `twcrawl-查詢結果-${rows.length}筆.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  function itemsTable(v) {
+    const its = v.items || [];
+    if (!its.length) return '<div class="note">（這張發票沒有品項明細）</div>';
+    const ms = matchesByNum[v.num] || [];
+    const itemHit = desc => desc && ms.some(m =>
+      (m.level === "品項" || m.level === "警訊標題") &&
+      typeof m.invoice === "string" && m.invoice.startsWith(desc));
+    return "<table><tr><th>品名</th><th class=\"num\">數量</th>" +
+      '<th class="num">單價</th><th class="num">金額</th></tr>' +
+      its.map(i =>
+        `<tr><td>${esc(i.desc ?? "—")}${itemHit(i.desc)
+          ? ' <span title="此品項出現在 FDA 命中（命中≠買到問題商品）">⚠</span>'
+          : ""}</td><td class="num">${qty(i.qty)}</td>` +
+        `<td class="num">${i.price == null ? "—" : Math.round(i.price).toLocaleString("zh-TW")}</td>` +
+        `<td class="num">${i.amount == null ? "—" : Math.round(i.amount).toLocaleString("zh-TW")}</td></tr>`
+      ).join("") + "</table>";
+  }
+  function toggleItems(tr, v) {
+    const next = tr.nextElementSibling;
+    if (next && next.classList.contains("items-row")) { next.remove(); return; }
+    const row = el("tr", "items-row");
+    row.innerHTML = `<td colspan="5">${itemsTable(v)}</td>`;
+    tr.after(row);
+  }
+
+  // ---- 店家查詢視圖 -----------------------------------------------------
+  function sellerView() {
+    const names = (D.sellers || []).map(s => s.name);
+    const card = el("div", "card");
+    card.append(el("h2", null, "店家查詢"));
+    card.append(el("div", "desc",
+      "可先選分類縮小範圍（不挑店家＝看整個分類的趨勢與店家排行），再挑店看明細"));
+    const f = el("div", "filters");
+    f.innerHTML = `<label>分類 <select id="scat">` +
+      `<option value="">全部</option>` +
+      (D.categories || []).map(c =>
+        `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("") +
+      `</select></label>` +
+      `<input type="search" id="sq" list="sellers" ` +
+      `placeholder="輸入或挑選店家（依全期金額排序）">` +
+      `<datalist id="sellers"></datalist>` +
+      `<datalist id="cats">` +
+      (D.categories || []).filter(c => c.name !== "未分類")
+        .map(c => `<option value="${esc(c.name)}">`).join("") + `</datalist>`;
+    card.append(f);
+    const out = el("div");
+    card.append(out);
+    body.append(card);
+
+    const input = f.querySelector("#sq");
+    const catSel = f.querySelector("#scat");
+    const dl = f.querySelector("#sellers");
+    // 從發票聚合而非 sellers[].category：品項覆寫後一家店可跨分類
+    // （好市多加油發票歸加油），排行、下拉、趨勢才會與磚的金額一致
+    const sellersIn = cat => {
+      const by = new Map();
+      for (const v of D.invoices || []) {
+        if (cat && v.category !== cat) continue;
+        let b = by.get(v.seller);
+        if (!b) by.set(v.seller, b = { name: v.seller, total: 0, count: 0 });
+        b.total += v.amount;
+        b.count += 1;
+      }
+      return [...by.values()].sort((a, b) => b.total - a.total);
+    };
+    function fillDatalist() {          // 下拉附登記名，設過招牌名也認得出
+      dl.innerHTML = sellersIn(catSel.value).map(s =>
+        `<option value="${esc(s.name)}">${(meta[s.name] || {}).legal
+          ? esc(meta[s.name].legal) : ""}</option>`
+      ).join("");
+    }
+    fillDatalist();
+
+    catSel.addEventListener("change", () => {
+      fillDatalist();
+      if (catSel.value && input.value &&
+          !sellersIn(catSel.value).some(s => s.name === input.value))
+        input.value = "";
+      if (input.value) renderSeller(input.value);
+      else renderCategory(catSel.value);
+    });
+    input.addEventListener("change", () => renderSeller(input.value));
+    const want = P.get("seller");
+    const wantCat = P.get("cat");
+    if (want && names.includes(want)) { input.value = want; renderSeller(want); }
+    else if (want) out.append(el("div", "note", `找不到店家「${esc(want)}」。`));
+    else if (wantCat && (D.categories || []).some(c => c.name === wantCat)) {
+      catSel.value = wantCat;
+      fillDatalist();
+      renderCategory(wantCat);
+    }
+
+    function renderCategory(cat) {
+      out.innerHTML = "";
+      P.delete("seller");
+      if (cat) P.set("cat", cat); else P.delete("cat");
+      syncUrl("seller");
+      if (!cat) {
+        out.append(el("div", "note", "（選一個分類看彙總，或直接挑一家店）"));
+        return;
+      }
+      const ss = sellersIn(cat);
+      const invs = D.invoices.filter(v => v.category === cat);
+      const total = invs.reduce((s, v) => s + v.amount, 0);
+      const tiles = el("div", "tiles");
+      for (const [label, value] of [
+        ["分類累計", nt(total)], ["筆數", invs.length + " 張"],
+        ["店家數", ss.length + " 家"],
+      ]) {
+        const t = el("div", "tile");
+        t.append(el("div", "label", label), el("div", "value", value));
+        tiles.append(t);
+      }
+      out.append(tiles);
+      const months = (D.months || []).map(mm => ({
+        month: mm.month,
+        v: invs.filter(x => x.date.slice(0, 7) === mm.month)
+               .reduce((s, x) => s + x.amount, 0),
+      }));
+      out.append(monthBars(months));
+      const lt = el("div", "scrollx");
+      lt.innerHTML = `<h2 style="margin-top:14px">「${esc(cat)}」的店家</h2>` +
+        '<table><tr><th>店家</th><th class="num">金額</th>' +
+        '<th class="num">筆數</th></tr>' +
+        ss.map(s =>
+          `<tr><td><button class="linkish pick" data-n="${esc(s.name)}">${
+            esc(s.name)}</button></td>` +
+          `<td class="num">${Math.round(s.total).toLocaleString("zh-TW")}</td>` +
+          `<td class="num">${s.count}</td></tr>`).join("") + "</table>";
+      lt.querySelectorAll("button.pick").forEach(b =>
+        b.addEventListener("click", () => {
+          input.value = b.dataset.n;
+          renderSeller(b.dataset.n);
+        }));
+      out.append(lt);
+    }
+
+    function renderSeller(name) {
+      out.innerHTML = "";
+      const m = meta[name];
+      if (!m) { out.append(el("div", "note", "（請從清單挑一家店）")); return; }
+      P.set("seller", name);
+      syncUrl("seller");
+      const invs = D.invoices.filter(v => v.seller === name);
+      const infoBits = [
+        m.legal && `公司名 ${esc(m.legal)}`,
+        `分類 ${esc(m.category)}`,
+        m.industry && `稅籍行業 ${esc(m.industry)}`,
+        m.address && esc(m.address),
+      ].filter(Boolean).join("・");
+      out.append(el("div", "desc", infoBits));
+
+      const assign = el("div", "filters");
+      assign.style.margin = "2px 0 12px";
+      assign.innerHTML = `<label>歸類 <input id="cat-in" list="cats" ` +
+        `value="${m.category === "未分類" ? "" : esc(m.category)}" ` +
+        `placeholder="分類"></label>` +
+        (SERVE ? `<label>招牌名 <input id="ali-in" ` +
+          `value="${m.legal ? esc(m.name) : ""}" ` +
+          `placeholder="招牌名（選填）"></label>` : "") +
+        `<button class="chip" id="cat-btn">${SERVE ? "存檔" : "複製規則片段"}</button>` +
+        `<span>${SERVE
+          ? "寫回 categories.local.json 並重生資料；重新整理（F5）看結果"
+          : "貼進 categories.local.json 後重跑 twcrawl export，或用 twcrawl serve 直接存"}</span>`;
+      assign.querySelector("#cat-btn").addEventListener("click", async () => {
+        const btn = assign.querySelector("#cat-btn");
+        const cat = (assign.querySelector("#cat-in").value || "").trim();
+        const aliEl = assign.querySelector("#ali-in");
+        const ali = aliEl ? aliEl.value.trim() : "";
+        const rname = m.legal || m.name;   // 規則與別名的鍵都是公司登記名
+        if (SERVE) {
+          if (!cat && !ali) { btn.textContent = "填分類或招牌名"; return; }
+          btn.textContent = "存檔中…";
+          const ok = await saveRules(cat ? { [rname]: cat } : {},
+                                     ali ? { [rname]: ali } : {});
+          btn.textContent = ok ? "✓ 已寫回" : "失敗（看主控台）";
+          if (ok) noteSaved(1);
+        } else {
+          if (!cat) { btn.textContent = "先填分類"; return; }
+          btn.textContent = (await copyText(`"${rname}": "${cat}",`))
+            ? "✓ 已複製" : "複製失敗";
+        }
+      });
+      out.append(assign);
+
+      const tiles = el("div", "tiles");
+      const total = invs.reduce((s, v) => s + v.amount, 0);
+      for (const [label, value] of [
+        ["累計", nt(total)], ["筆數", invs.length + " 張"],
+        ["單筆平均", invs.length ? nt(total / invs.length) : "—"],
+      ]) {
+        const t = el("div", "tile");
+        t.append(el("div", "label", label), el("div", "value", value));
+        tiles.append(t);
+      }
+      out.append(tiles);
+
+      // 月趨勢（沿用全期月份軸，沒消費的月份是 0）
+      const months = (D.months || []).map(mm => ({
+        month: mm.month,
+        v: invs.filter(x => x.date.slice(0, 7) === mm.month)
+               .reduce((s, x) => s + x.amount, 0),
+      }));
+      out.append(monthBars(months));
+
+      if (hasItems) {
+        const stats = {};
+        for (const v of invs) for (const i of (v.items || [])) {
+          const k = i.desc ?? "—";
+          (stats[k] ||= { n: 0, amt: 0 });
+          stats[k].n += 1;
+          stats[k].amt += i.amount || 0;
+        }
+        const rows = Object.entries(stats).sort((a, b) => b[1].amt - a[1].amt);
+        const top = rows.slice(0, 50);
+        const it = el("div", "scrollx");
+        it.innerHTML = "<h2>品項統計</h2>" +
+          '<div class="desc">點品名可全庫搜尋（看看是不是別家也買過）' +
+          (rows.length > 50 ? `・金額前 50 名（共 ${rows.length} 項）` : "") +
+          "</div>" +
+          "<table><tr><th>品名</th><th class=\"num\">次數</th>" +
+          '<th class="num">總金額</th></tr>' +
+          top.map(([k, s]) =>
+            `<tr><td><button class="linkish itemq" data-q="${esc(k)}">${esc(k)}</button></td>` +
+            `<td class="num">${s.n}</td>` +
+            `<td class="num">${Math.round(s.amt).toLocaleString("zh-TW")}</td></tr>`
+          ).join("") + "</table>";
+        it.querySelectorAll("button.itemq").forEach(btn => {
+          btn.addEventListener("click", () => {
+            P.set("q", btn.dataset.q);
+            P.delete("cat");   // 全庫搜尋：不受店家查詢殘留的分類篩選限制
+            show("list");
+          });
+        });
+        out.append(it);
+      }
+
+      const lt = el("div", "scrollx");
+      lt.innerHTML = "<h2 style='margin-top:14px'>發票（點列展開品項）</h2>" +
+        "<table><tr><th>日期</th><th class=\"num\">金額</th><th>發票號碼</th></tr>" +
+        invs.map((v, i) =>
+          `<tr class="inv" data-i="${i}"><td>${v.date}</td>` +
+          `<td class="num">${Math.round(v.amount).toLocaleString("zh-TW")}</td>` +
+          `<td>${esc(v.num || "—")}${fdaMark(v)}${lotMark(v)}</td></tr>`).join("") + "</table>";
+      lt.querySelectorAll("tr.inv").forEach(tr => {
+        tr.addEventListener("click", evt => {
+          if (evt.target.closest("a")) return;
+          toggleItems(tr, invs[+tr.dataset.i]);
+        });
+      });
+      out.append(lt);
+    }
+  }
+
+  function monthBars(months) {
+    const W = 1000, H = 170, mT = 20, mB = 24, mL = 58, mR = 8;
+    const iw = W - mL - mR, ih = H - mT - mB;
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    const max = Math.max(1, ...months.map(m => m.v));
+    const years = new Set(months.map(m => m.month.slice(0, 4)));
+    const lab = m => years.size > 1
+      ? m.month.slice(2, 4) + "/" + m.month.slice(5)
+      : Number(m.month.slice(5)) + "月";
+    const y = v => mT + ih - v / max * ih;
+    const base = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    for (const [attr, val] of Object.entries({ x1: mL, x2: W - mR, y1: y(0), y2: y(0),
+      stroke: css("--baseline"), "stroke-width": 1 })) base.setAttribute(attr, val);
+    svg.append(base);
+    const band = iw / months.length, bw = Math.min(24, band * 0.55);
+    months.forEach((m, i) => {
+      const cx = mL + band * (i + 0.5);
+      if (m.v > 0) {
+        const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        for (const [attr, val] of Object.entries({
+          x: cx - bw / 2, y: y(m.v), width: bw, height: Math.max(y(0) - y(m.v), 1),
+          rx: 3, fill: css("--s1") })) r.setAttribute(attr, val);
+        svg.append(r);
+        const cap = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        for (const [attr, val] of Object.entries({ x: cx, y: y(m.v) - 5,
+          "text-anchor": "middle", "font-size": 10.5, fill: css("--text-2") }))
+          cap.setAttribute(attr, val);
+        cap.textContent = Math.round(m.v).toLocaleString("zh-TW");
+        svg.append(cap);
+      }
+      const xl = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      for (const [attr, val] of Object.entries({ x: cx, y: H - 6,
+        "text-anchor": "middle", "font-size": 11, fill: css("--muted") }))
+        xl.setAttribute(attr, val);
+      xl.textContent = lab(m);
+      svg.append(xl);
+    });
+    return svg;
+  }
+
+  // ---- 固定支出視圖 -----------------------------------------------------
+  // 偵測在 export.py 的 _detect_fixed（月報磚與本視圖共用），這裡只呈現。
+  const periodLabel = d =>
+    d <= 38 ? "每月" : d <= 70 ? "每兩月" : d <= 100 ? "每季"
+      : d <= 200 ? "每半年" : d <= 400 ? "每年" : `約 ${Math.round(d)} 天`;
+
+  function fixedView() {
+    const card = el("div", "card");
+    card.append(el("h2", null, "固定支出"));
+    card.append(el("div", "desc",
+      "同一店家、金額相近、月級以上週期（含雙月、年繳）且至少出現 3 次。" +
+      "偵測是提示，不代表存在契約；高頻日常（如手搖飲）依定義不列入。"));
+    const found = Array.isArray(D.fixed) ? D.fixed : [];
+    if (!found.length) {
+      card.append(el("div", "note", "沒有偵測到固定支出（或資料月份還不夠長）。"));
+      body.append(card);
+      return;
+    }
+    const act = found.filter(x => x.active);
+    const tiles = el("div", "tiles");
+    for (const [label, value, extra] of [
+      ["每月固定燒", nt(act.reduce((s, x) => s + x.monthly, 0)),
+       "進行中項目的月化合計"],
+      ["進行中", act.length + " 項", ""],
+      ["疑似已停", (found.length - act.length) + " 項",
+       "超過 1.6 個週期沒再出現"],
+    ]) {
+      const t = el("div", "tile");
+      t.append(el("div", "label", label), el("div", "value", value));
+      if (extra) t.append(el("div", "delta", extra));
+      tiles.append(t);
+    }
+    card.append(tiles);
+    const wrapT = el("div", "scrollx");
+    wrapT.innerHTML = "<table><tr><th>店家</th><th class=\"num\">單筆金額</th>" +
+      "<th>週期</th><th class=\"num\">次數</th><th>首次</th><th>最近</th>" +
+      "<th>下次預估</th><th>狀態</th><th class=\"num\">月化金額</th></tr>" +
+      found.map(x =>
+        `<tr><td><button class="linkish" data-s="${esc(x.seller)}">${esc(x.seller)}</button></td>` +
+        `<td class="num">${Math.round(x.amount).toLocaleString("zh-TW")}</td>` +
+        `<td>${periodLabel(x.periodDays)}</td><td class="num">${x.n}</td>` +
+        `<td>${x.first}</td><td>${x.last}</td>` +
+        `<td>${x.next || "—"}</td>` +
+        `<td class="${x.active ? "ok" : "off"}">${x.active ? "進行中" : "疑似已停"}</td>` +
+        `<td class="num">${Math.round(x.monthly).toLocaleString("zh-TW")}</td></tr>`
+      ).join("") + "</table>";
+    wrapT.querySelectorAll("button.linkish").forEach(b => {
+      b.addEventListener("click", () => {
+        P.set("seller", b.dataset.s);
+        show("seller");
+      });
+    });
+    card.append(wrapT);
+    body.append(card);
+  }
+
+  // ---- 視圖切換 ---------------------------------------------------------
+  function show(view) {
+    if (view !== "seller") P.delete("seller");
+    for (const b of chips.children)
+      b.classList.toggle("on", b.dataset.view === view);
+    body.innerHTML = "";
+    if (view === "list") listView();
+    else if (view === "seller") sellerView();
+    else fixedView();
+    syncUrl(view);
+  }
+  show(initView);
+})();
+</script>
+</body>
+</html>

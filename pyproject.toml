@@ -1,0 +1,19 @@
+[project]
+name = "twcrawl"
+version = "0.1.0"
+description = "台灣電子發票消費紀錄與食藥署下架產品清單擷取工具"
+requires-python = ">=3.10"
+dependencies = ["playwright>=1.40", "pyzipper>=0.3", "pypdf>=4"]
+
+[project.scripts]
+twcrawl = "twcrawl.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+twcrawl = ["web/*.html"]
