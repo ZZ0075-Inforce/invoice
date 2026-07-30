@@ -16,7 +16,7 @@ FDA 目前接三個來源：中聯油脂案專區強制下架清單（edible_oil
 ```
 pip install -e .                      # 一律 editable；PyPI 上的 twcrawl 是無關的舊套件
 python -m playwright install chromium # playwright 指令找不到時用這個
-python tests/test_twcrawl.py          # 測試（37/37，不用 pytest）
+python tests/test_twcrawl.py          # 測試（40/40，不用 pytest）
 
 # 每月例行（一鍵；fetch 區間自動推算、FDA 回溯 90 天只給 feed 型來源）
 twcrawl update                        # login→fetch→fda→match→lottery→export→backup
@@ -73,11 +73,14 @@ src/twcrawl/
 │                 KeyboardInterrupt 好與「步驟失敗」分辨）、storage_state
 ├── netcapture.py 攔截 XHR/下載 → captures/（隨錄隨寫 index.json）
 ├── tables.py     通用表格擷取 + 分頁（含截斷警告）
-├── db.py         SQLite schema 與 upsert（全部冪等，重跑安全）
+├── db.py         SQLite schema 與 upsert（全部冪等，重跑安全）＋ seller_industries
+│                 讀取（店家名→稅籍行業，統編取該店家名下任一非空；半數發票不
+│                 帶統編，逐張查會讓同一家店在不同發票得到不同分類）
 ├── match.py      發票 × FDA 比對（店家/品項/警訊標題三層級；FDA 欄位名以關鍵字
 │                 自動定位。兩道精確化（2026-07-28 使用者回饋）：①品項/警訊層級
 │                 濾除餐飲現調店家——菜名撞包裝品名屬誤報（菜名×同名即食包），
-│                 判定走店家分類＋稅籍行業兩路（_EATERY_CATS）；
+│                 判定＝Category.eatery，與儀表板同一條鏈（2026-07-30 前是雙路
+│                 OR，會讓店家規則已判定的便利商店/百貨被稅籍翻成餐飲而濾掉）；
 │                 ②店家層級做品項排除——發票品項與該業者名下下架產品全無交集
 │                 就排除（純採買通路不會因上榜而命中），無明細才留純通路提示。
 │                 排除/濾除數與樣本照印保持透明）
@@ -89,13 +92,25 @@ src/twcrawl/
 │                 存 out/cache/cloud_*.txt.gz（期別取自 PDF 檔名、PDF 用完即刪、
 │                 同期檔名固定不重下）；同張兩類都中依規定擇高（also 註記）。
 │                 結果即算即得不落地，號碼存 lottery_draws 表供離線重對）
-├── categories.py 店家分類：rules 兩層（通用連鎖＋業種詞內建；個人店家在
-│                 categories.local.json，gitignored、個人優先、長樣式優先）→ 稅籍行業
-│                 INDUSTRY_RULES 後備 → 未分類；aliases 招牌名別名（登記名→招牌名）；
-│                 item_rules 品項覆寫（發票層級）：品項命中就改「整張發票」的分類
-│                 ——跨業態店家用（好市多加油發票→加油，店家業態不動；油品發票
-│                 實測張張單品項所以覆寫整張即精確），通用層只收無鉛汽油/柴油，
-│                 曖昧詞放個人層；非必要分類預設手搖飲/甜點零食/咖啡；
+├── categories.py 店家分類，**整條優先序鏈收在單一介面之後**（2026-07-30；之前
+│                 export 與 match 各自組鏈且組法不同）。介面只有兩個呼叫：
+│                 for_seller(名) / for_invoice(名, 品項) → Category(name, source,
+│                 unnecessary, eatery)。鏈：item_rules 品項覆寫（source=item，改
+│                 「整張發票」，跨業態店家用——好市多加油發票→加油，店家業態不動；
+│                 通用層只收無鉛汽油/柴油，曖昧詞放個人層）→ rules 個人（personal）
+│                 → rules 通用（generic，連鎖＋業種詞）→ 稅籍行業 INDUSTRY_RULES
+│                 後備（industry）→ 未分類（none）。同層長樣式優先；稅籍多重行業
+│                 （「餐館、咖啡館」）逐段比對、**主業優先**——bizreg 保留財政部的
+│                 主業在前順序，整串一起掃會被次要業別攔截。
+│                 **「沒命中」看 source=="none"，不要拿名字比 UNCATEGORIZED**。
+│                 稅籍行業靠 with_industries() 接上——Classifier 常在拿到 conn 之前
+│                 就建好（serve、測試），所以由 build_payload/run_match 統一接，
+│                 少接不會報錯只會讓兩成店家靜默掉回未分類。
+│                 aliases 招牌名別名（沒命中回原名，不是 None）；
+│                 unnecessary 預設手搖飲/甜點零食/咖啡，個人層**整組取代**；
+│                 eatery 預設餐飲/速食/手搖飲/咖啡，個人層**聯集**（現調是事實不是
+│                 偏好，內建清不掉；自創分類名如「麵食」要在這宣告否則濾除靜默失效）；
+│                 normalize() 公開給 match 共用，別再各留一份；
 │                 load_local_config 防呆——語法錯（含行號）/重複鍵/型別錯
 │                 都給人話而非 traceback
 ├── bizreg.py     財政部 BGMOPEN1 稅籍登記（66MB zip 串流過濾，只留自己的統編入
@@ -251,13 +266,27 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   查詢頁店家排行/下拉改由發票聚合，跨分類店家與磚的金額一致。實測庫內
   油品發票全數改歸加油；測試 32/32。完整品項層級分類（每品項各自歸類）
   維持緩辦，等品名正規化有解
-- ✅ 指令層 commands.py（2026-07-30，架構檢視 candidate #3；決策見 ADR-0003）：
+- ✅ 分類解析收成單一 interface（2026-07-30，架構檢視 candidate 1）：原本
+  `categories.py` 出四個獨立 resolver 卻不組裝，export 用後備鏈、match 用雙路
+  OR，同零件組出不同結果。現在 `for_seller`／`for_invoice` → `Category`，鏈全在
+  implementation 裡；`_EATERY_CATS` 手抄字串與 match 複製的 `_norm` 都刪除。
+  重構本身**輸出零差異**（data.js 與 match_report.csv SHA256 相同）——實測三個
+  不一致當時都還沒咬到資料。測試 34/34（品項覆寫與稅籍後備的語意從需要
+  SQLite 檔改成純測試，export 端各留接線斷言）
+- ✅ 稅籍多重行業改主業優先（2026-07-30，接在上一條後面單獨一個 commit，
+  因為它會動輸出）：`industry_category` 原本整串一起掃 INDUSTRY_RULES 的插入
+  順序，次要業別會攔截主業（「餐館、咖啡館」歸咖啡）。改成逐段比對、主業先問
+  ——bizreg 本來就刻意保留財政部的主業在前順序。實測庫內 2 家店改分類、
+  5 張發票換分類磚，非必要消費少 5 筆；match 報告 0 行差異。測試 35/35
+- ✅ 指令層 commands.py（2026-07-30，架構檢視 candidate 3；決策見 ADR-0003）：
   15 個指令 body 從 `main()` 搬出 10 個，update 變成 Step 清單。修掉 update
   與 subcommand 的五處漂移（登入前置檢查、`--no-cloud`、max_pages 兩份、
   備份密碼政策、步數手打）；一步失敗改成記錄後續跑、回非零退出碼；人工中止
   改拋 KeyboardInterrupt 才分辨得出「Ctrl+C」與「步驟掛了」；`_latest_capture`
   改按 mtime 取（原字典序下 `einvoice-fetch-*` 恆勝 `einvoice-2*`）。
-  CLI 表面向後相容，只新增 `update --no-cloud`。測試 32→37
+  FDA 的 `since` 改成只給 feed 型來源（事件型清單不依日期排序，拿去停會
+  任意截斷；型態隨之從 export 搬進 `fda.SOURCE_META`）。CLI 表面向後相容，
+  只新增 `update --no-cloud`。測試 35→40
 - ⬜ 緩辦（要做先問）：CSV 匯出、分類趨勢圖、地圖店家搜尋
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

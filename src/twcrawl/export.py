@@ -15,7 +15,8 @@ import shutil
 from collections import defaultdict
 from pathlib import Path
 
-from .categories import Classifier, UNCATEGORIZED, industry_category
+from . import db
+from .categories import Classifier, UNCATEGORIZED
 
 TEMPLATE = Path(__file__).parent / "web" / "dashboard.html"
 MATCH_REPORT = Path("out/match_report.csv")
@@ -25,23 +26,25 @@ MATCH_REPORT = Path("out/match_report.csv")
 # 在 fda.py 的 SOURCES 加一條，食安頁自動長出分頁，這裡不改也能動。
 
 
-def _seller_info(conn, cl: Classifier) -> dict[str, dict]:
-    """法定店名 → 顯示名、最終分類（rules → 稅籍行業後備）、行業、地址。"""
-    reg = {ban: {"address": addr, "industry": ind, "lat": lat, "lon": lon}
-           for ban, addr, ind, lat, lon in conn.execute(
-               "select ban, address, industry, lat, lon from biz_registry")}
+def _seller_info(conn, cl: Classifier, industries: dict[str, str]) -> dict[str, dict]:
+    """法定店名 → 顯示名、店家分類、行業、地址。
+
+    分類鏈（規則兩層 → 稅籍行業後備 → 未分類）整條在 Classifier 裡，
+    這裡只接資料庫欄位。
+    """
+    reg = {ban: {"address": addr, "lat": lat, "lon": lon}
+           for ban, addr, lat, lon in conn.execute(
+               "select ban, address, lat, lon from biz_registry")}
     info: dict[str, dict] = {}
     for sname, ban in conn.execute(
             "select seller_name, max(seller_ban) from invoices "
             "where seller_name is not null group by seller_name"):
-        cat = cl.category(sname)
+        cat = cl.for_seller(sname)
         r = reg.get(str(ban).strip() if ban else "")
-        industry = r["industry"] if r else None
-        if cat == UNCATEGORIZED and industry:
-            cat = industry_category(industry) or UNCATEGORIZED
         info[sname] = {
-            "display": cl.display_name(sname) or sname,
-            "legal": sname, "category": cat, "industry": industry,
+            "display": cl.display_name(sname),
+            "legal": sname, "category": cat.name, "source": cat.source,
+            "industry": industries.get(sname),
             "address": r["address"] if r else None,
             "lat": r["lat"] if r else None,
             "lon": r["lon"] if r else None,
@@ -121,8 +124,11 @@ def _detect_fixed(inv_rows: list[dict]) -> list[dict]:
 
 def build_payload(conn, classifier: Classifier | None = None,
                   match_report: Path | str | None = None) -> dict:
-    cl = classifier or Classifier()
-    info = _seller_info(conn, cl)
+    # 稅籍行業後備一律在這裡接上：Classifier 可能是在拿到 conn 之前建的
+    # （serve、測試都是），少接不會報錯、只會讓兩成店家靜默掉回未分類。
+    industries = db.seller_industries(conn)
+    cl = (classifier or Classifier()).with_industries(industries)
+    info = _seller_info(conn, cl, industries)
     top_items = _top_items(conn)
     invs = conn.execute(
         "select inv_num, inv_date, seller_name, amount from invoices "
@@ -145,14 +151,14 @@ def build_payload(conn, classifier: Classifier | None = None,
         inv_items = items.get(num, [])
         # 品項覆寫（發票層級）：跨業態店家（好市多加油站）靠品項關鍵字改
         # 單張發票的分類；店家本身的業態分類（sellers、地圖）不動
-        cat = cl.item_category(i["desc"] for i in inv_items) or si["category"]
+        cat = cl.for_invoice(seller, (i["desc"] for i in inv_items))
         mon = months.setdefault(m, {"month": m, "total": 0.0, "count": 0,
                                     "byCategory": defaultdict(float)})
         mon["total"] += amount
         mon["count"] += 1
-        mon["byCategory"][cat] += amount
-        c = cats.setdefault(cat, {"name": cat, "total": 0.0, "count": 0,
-                                  "unnecessary": cl.is_unnecessary(cat)})
+        mon["byCategory"][cat.name] += amount
+        c = cats.setdefault(cat.name, {"name": cat.name, "total": 0.0, "count": 0,
+                                       "unnecessary": cat.unnecessary})
         c["total"] += amount
         c["count"] += 1
         s = sellers.setdefault(seller, {
@@ -165,11 +171,11 @@ def build_payload(conn, classifier: Classifier | None = None,
         })
         s["total"] += amount
         s["count"] += 1
-        if cl.is_unnecessary(cat):
+        if cat.unnecessary:
             unnecessary.append({"date": str(inv_date)[:10], "seller": si["display"],
-                                "category": cat, "amount": amount})
+                                "category": cat.name, "amount": amount})
         invoice_rows.append({"num": num, "date": str(inv_date)[:10],
-                             "seller": si["display"], "category": cat,
+                             "seller": si["display"], "category": cat.name,
                              "amount": amount, "items": inv_items})
 
     for mon in months.values():
@@ -252,8 +258,10 @@ def build_payload(conn, classifier: Classifier | None = None,
         lottery["next"] = {"label": lottery_mod.period_label(np_),
                           "drawDate": nd, "pending": pending}
 
+    # 「沒有任何規則命中」看 source，不是拿名字跟 UNCATEGORIZED 比
     uncategorized = sorted(
-        (s for s in sellers.values() if s["category"] == UNCATEGORIZED),
+        (s for name, s in sellers.items()
+         if (info.get(name) or {}).get("source", "none") == "none"),
         key=lambda s: -s["total"],
     )[:15]
 
