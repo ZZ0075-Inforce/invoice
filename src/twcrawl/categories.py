@@ -149,14 +149,24 @@ class Category:
     eatery: bool
 
 
+_INDUSTRY_PATTERNS = [(normalize(pat), cat) for pat, cat in INDUSTRY_RULES.items()]
+
+
 def _industry_category(industry_text) -> str | None:
-    """從稅籍行業名稱（可能多個、以「、」相連）推分類。"""
-    t = normalize(industry_text)
-    if not t:
-        return None
-    for pat, cat in INDUSTRY_RULES.items():
-        if normalize(pat) in t:
-            return cat
+    """從稅籍行業名稱（可能多個、以「、」相連）推分類，主業優先。
+
+    `bizreg` 刻意保留財政部給的主業在前順序，所以這裡逐段比對、先問主業。
+    整串一起掃會讓次要業別攔截主業——例如「餐館、咖啡館」會因為 INDUSTRY_RULES
+    裡「咖啡館」排在「餐館」前面而歸成咖啡（2026-07-30 修正，實測庫內 2 家店
+    的分類因此改變）。
+    """
+    for seg in str(industry_text or "").split("、"):
+        t = normalize(seg)
+        if not t:
+            continue
+        for pat, cat in _INDUSTRY_PATTERNS:
+            if pat in t:
+                return cat
     return None
 
 

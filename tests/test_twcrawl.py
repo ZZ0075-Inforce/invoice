@@ -702,6 +702,23 @@ def test_category_chain_industry_and_item_override():
     print("✓ 分類鏈：品項覆寫 → 規則兩層 → 稅籍後備 → 未分類")
 
 
+def test_industry_primary_first():
+    """多重行業以「、」相連、主業在前（bizreg 保留官方順序）——先問主業。"""
+    from twcrawl.categories import Classifier
+
+    with TemporaryDirectory() as td:
+        cl = Classifier(local_path=Path(td) / "沒有這個檔.json").with_industries({
+            "測試甲": "餐館、咖啡館",
+            "測試乙": "百貨公司、餐館",
+            "測試丙": "咖啡館、餐館",
+        })
+        assert cl.for_seller("測試甲").name == "餐飲", \
+            "主業餐館應勝過次要的咖啡館（整串一起掃會被咖啡館攔截）"
+        assert cl.for_seller("測試乙").name == "百貨"
+        assert cl.for_seller("測試丙").name == "咖啡", "主業真的是咖啡館就歸咖啡"
+    print("✓ 稅籍行業：多重行業以主業優先")
+
+
 def test_eatery_declaration_merges():
     """自創分類名要宣告才算現調；內建四類是聯集，清不掉。"""
     from twcrawl.categories import Classifier

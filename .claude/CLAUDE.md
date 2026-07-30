@@ -16,7 +16,7 @@ FDA 目前接三個來源：中聯油脂案專區強制下架清單（edible_oil
 ```
 pip install -e .                      # 一律 editable；PyPI 上的 twcrawl 是無關的舊套件
 python -m playwright install chromium # playwright 指令找不到時用這個
-python tests/test_twcrawl.py          # 測試（34/34，不用 pytest）
+python tests/test_twcrawl.py          # 測試（35/35，不用 pytest）
 
 # 每月例行（一鍵；fetch 區間自動推算、FDA 回溯 90 天）
 twcrawl update                        # login→fetch→fda→match→lottery→export→backup
@@ -90,7 +90,9 @@ src/twcrawl/
 │                 「整張發票」，跨業態店家用——好市多加油發票→加油，店家業態不動；
 │                 通用層只收無鉛汽油/柴油，曖昧詞放個人層）→ rules 個人（personal）
 │                 → rules 通用（generic，連鎖＋業種詞）→ 稅籍行業 INDUSTRY_RULES
-│                 後備（industry）→ 未分類（none）。同層長樣式優先。
+│                 後備（industry）→ 未分類（none）。同層長樣式優先；稅籍多重行業
+│                 （「餐館、咖啡館」）逐段比對、**主業優先**——bizreg 保留財政部的
+│                 主業在前順序，整串一起掃會被次要業別攔截。
 │                 **「沒命中」看 source=="none"，不要拿名字比 UNCATEGORIZED**。
 │                 稅籍行業靠 with_industries() 接上——Classifier 常在拿到 conn 之前
 │                 就建好（serve、測試），所以由 build_payload/run_match 統一接，
@@ -257,6 +259,11 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   重構本身**輸出零差異**（data.js 與 match_report.csv SHA256 相同）——實測三個
   不一致當時都還沒咬到資料。測試 34/34（品項覆寫與稅籍後備的語意從需要
   SQLite 檔改成純測試，export 端各留接線斷言）
+- ✅ 稅籍多重行業改主業優先（2026-07-30，接在上一條後面單獨一個 commit，
+  因為它會動輸出）：`industry_category` 原本整串一起掃 INDUSTRY_RULES 的插入
+  順序，次要業別會攔截主業（「餐館、咖啡館」歸咖啡）。改成逐段比對、主業先問
+  ——bizreg 本來就刻意保留財政部的主業在前順序。實測庫內 2 家店改分類、
+  5 張發票換分類磚，非必要消費少 5 筆；match 報告 0 行差異。測試 35/35
 - ⬜ 緩辦（要做先問）：CSV 匯出、分類趨勢圖、地圖店家搜尋
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive
