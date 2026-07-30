@@ -13,32 +13,23 @@ FDA 各來源的欄位名稱不一致（業者/公司名稱/廠商、產品/品�
 品項／警訊層級只對「零售」有意義：餐飲現調店家（小吃店、快炒、手搖飲…）
 的發票品項是菜名，撞包裝食品名必為誤報（例：菜名「蝦仁蛋炒飯」×
 即食包「蝦仁蛋炒飯280g」）——就算店家真用了下架原料，菜名比對也
-偵測不到，那要靠店家層級（不濾）。現調判定走兩路：店家分類（Classifier）
-與稅籍行業（biz_registry × industry_category），其一屬餐飲類即濾，
-濾除數與樣本照印保持透明。代價：餐飲店販售包裝品（咖啡店掛耳包）的
-極端情境會漏，取精確度。
+偵測不到，那要靠店家層級（不濾）。現調判定＝店家分類的 eatery 屬性，
+與儀表板同一條鏈（店家規則優先、稅籍行業只在沒命中時後備）；自創分類名
+要在 categories.local.json 的 eatery 宣告。濾除數與樣本照印保持透明。
+代價：餐飲店販售包裝品（咖啡店掛耳包）的極端情境會漏，取精確度。
 """
 
 from __future__ import annotations
 
 import csv
 import json
-import re
-import unicodedata
 from pathlib import Path
 
-from .categories import Classifier, industry_category
+from . import db
+from .categories import Classifier, normalize
 
 _SELLER_KEYS = ("業者", "公司", "廠商", "商號", "責任廠商")
 _PRODUCT_KEYS = ("產品", "品名", "品項", "商品")
-_EATERY_CATS = {"餐飲", "速食", "手搖飲", "咖啡"}
-
-
-def _norm(s) -> str:
-    if not s:
-        return ""
-    s = unicodedata.normalize("NFKC", str(s))  # 全形→半形
-    return re.sub(r"[\s　]+", "", s).lower()
 
 
 def _fda_fields(rec: dict) -> tuple[str | None, str | None]:
@@ -55,14 +46,9 @@ def _fda_fields(rec: dict) -> tuple[str | None, str | None]:
 
 def run_match(conn, report_path: Path, classifier: Classifier,
               since: str | None = None) -> dict[str, int]:
-    cl = classifier
-    industries = dict(conn.execute(
-        "select ban, industry from biz_registry where industry is not null"))
-
-    def _is_eatery(sname, ban) -> bool:
-        if cl.category(sname) in _EATERY_CATS:
-            return True
-        return industry_category(industries.get(ban)) in _EATERY_CATS
+    # 稅籍行業後備與 export 走同一份讀取、同一條鏈——這裡曾是雙路 OR，
+    # 會讓店家規則已經判定的店（便利商店、百貨）再被稅籍翻成餐飲而濾掉。
+    cl = classifier.with_industries(db.seller_industries(conn))
 
     fda_rows = [
         (json.loads(data), src)
@@ -74,7 +60,7 @@ def run_match(conn, report_path: Path, classifier: Classifier,
     news: list[tuple[str, str, str]] = []  # 標題式來源（回收公告、警訊）
     for rec, src in fda_rows:
         s, p = _fda_fields(rec)
-        ns, np_ = _norm(s), _norm(p)
+        ns, np_ = normalize(s), normalize(p)
         if len(ns) >= 3:
             sellers.setdefault(ns, (s, src))
         if len(np_) >= 3 and not np_.isdigit():
@@ -83,7 +69,7 @@ def run_match(conn, report_path: Path, classifier: Classifier,
                 seller_products.setdefault(ns, []).append(np_)
         if not s and not p:
             title = next((v for k, v in rec.items() if "標題" in str(k)), None)
-            nt = _norm(title)
+            nt = normalize(title)
             if len(nt) >= 4:
                 news.append((nt, str(title), src))
 
@@ -92,7 +78,7 @@ def run_match(conn, report_path: Path, classifier: Classifier,
         f"select inv_num, inv_date, seller_name from invoices where 1=1 {cond}", args
     ).fetchall()
     items = conn.execute(
-        "select i.inv_num, v.inv_date, v.seller_name, v.seller_ban, i.description "
+        "select i.inv_num, v.inv_date, v.seller_name, i.description "
         "from invoice_items i join invoices v on v.inv_num = i.inv_num "
         f"where i.description is not null {cond.replace('inv_date', 'v.inv_date')}",
         args,
@@ -104,8 +90,8 @@ def run_match(conn, report_path: Path, classifier: Classifier,
 
     # 發票 → 正規化品項（店家命中時做品項排除用）
     items_by_inv: dict[str, list[str]] = {}
-    for inv_num, _d, _s, _b, desc in items:
-        nd = _norm(desc)
+    for inv_num, _d, _s, desc in items:
+        nd = normalize(desc)
         if len(nd) >= 3 and not nd.isdigit():
             items_by_inv.setdefault(inv_num, []).append(nd)
 
@@ -115,7 +101,7 @@ def run_match(conn, report_path: Path, classifier: Classifier,
     seller_hits: list[dict] = []
     seller_clears: list[dict] = []
     for inv_num, inv_date, sname in invs:
-        n = _norm(sname)
+        n = normalize(sname)
         if len(n) < 3:
             continue
         for fn, (orig, src) in sellers.items():
@@ -138,11 +124,11 @@ def run_match(conn, report_path: Path, classifier: Classifier,
     prod_hits: list[dict] = []
     news_hits: list[dict] = []
     eatery_skips: list[dict] = []
-    for inv_num, inv_date, sname, ban, desc in items:
-        nd = _norm(desc)
+    for inv_num, inv_date, sname, desc in items:
+        nd = normalize(desc)
         if len(nd) < 3 or nd.isdigit():  # 純數字品項（價格/重量）必然誤報
             continue
-        eatery = _is_eatery(sname, ban)
+        eatery = cl.for_seller(sname).eatery
         for np_, orig_p, orig_s, src in products:
             if nd in np_ or np_ in nd:
                 hit = {

@@ -651,17 +651,92 @@ def test_categories_two_tier_precedence():
             "unnecessary": ["餐飲"],
         }, ensure_ascii=False), encoding="utf-8")
         cl = Classifier(local_path=local)
-        assert cl.category("全聯實業股份有限公司") == "個人覆寫", "個人層應優先於通用層"
-        assert cl.category("小巷麵館") == "餐飲"
-        assert cl.category("不知名商行") == "未分類"
-        assert cl.is_unnecessary("餐飲") and not cl.is_unnecessary("手搖飲"), \
+        personal = cl.for_seller("全聯實業股份有限公司")
+        assert personal.name == "個人覆寫", "個人層應優先於通用層"
+        assert personal.source == "personal"
+        assert cl.for_seller("小巷麵館").name == "餐飲"
+        miss = cl.for_seller("不知名商行")
+        assert miss.name == "未分類" and miss.source == "none"
+        assert cl.for_seller("小巷麵館").unnecessary \
+            and not cl.for_seller("五十嵐測試店").unnecessary, \
             "unnecessary 提供時應整組取代預設"
 
         default = Classifier(local_path=Path(td) / "沒有這個檔.json")
-        assert default.category("統一超商股份有限公司") == "便利商店"
-        assert default.category("五十嵐測試店") == "手搖飲"
-        assert default.is_unnecessary("手搖飲")
-    print("✓ 店家分類兩層規則（個人優先、未分類後備）")
+        cvs = default.for_seller("統一超商股份有限公司")
+        assert cvs.name == "便利商店" and cvs.source == "generic"
+        assert default.for_seller("五十嵐測試店").name == "手搖飲"
+        assert default.for_seller("五十嵐測試店").unnecessary
+    print("✓ 店家分類兩層規則（個人優先、未分類後備、source 標明命中層級）")
+
+
+def test_category_chain_industry_and_item_override():
+    """整條優先序鏈都在 Classifier 裡——呼叫端不再自己組。"""
+    from twcrawl.categories import Classifier
+
+    with TemporaryDirectory() as td:
+        cl = Classifier(local_path=Path(td) / "沒有這個檔.json")
+        assert cl.for_seller("神秘小舖").source == "none", "沒接稅籍前應是未分類"
+
+        wired = cl.with_industries({"神秘小舖": "餐盒零售"})
+        ind = wired.for_seller("神秘小舖")
+        assert ind.name == "餐飲" and ind.source == "industry", \
+            "rules 兩層沒中才輪到稅籍行業後備"
+        assert ind.eatery
+        assert cl.for_seller("神秘小舖").source == "none", \
+            "with_industries 回傳新物件，不得汙染原本的快取"
+
+        conv = cl.with_industries({"統一超商股份有限公司": "飲料店"})
+        got = conv.for_seller("統一超商股份有限公司")
+        assert got.name == "便利商店" and got.source == "generic", \
+            "店家規則命中就算數，稅籍不得覆蓋（原本 match 走雙路 OR 會翻掉）"
+        assert not got.eatery, "便利商店賣包裝品，不該被當現調濾掉"
+
+        inv = wired.for_invoice("好市多股份有限公司", ["95無鉛汽油"])
+        assert inv.name == "加油" and inv.source == "item", "品項覆寫壓在最上層"
+        assert wired.for_seller("好市多股份有限公司").name == "量販", \
+            "店家業態分類不受品項覆寫影響"
+        assert wired.for_invoice("好市多股份有限公司", ["鮮奶"]).name == "量販"
+    print("✓ 分類鏈：品項覆寫 → 規則兩層 → 稅籍後備 → 未分類")
+
+
+def test_industry_primary_first():
+    """多重行業以「、」相連、主業在前（bizreg 保留官方順序）——先問主業。"""
+    from twcrawl.categories import Classifier
+
+    with TemporaryDirectory() as td:
+        cl = Classifier(local_path=Path(td) / "沒有這個檔.json").with_industries({
+            "測試甲": "餐館、咖啡館",
+            "測試乙": "百貨公司、餐館",
+            "測試丙": "咖啡館、餐館",
+        })
+        assert cl.for_seller("測試甲").name == "餐飲", \
+            "主業餐館應勝過次要的咖啡館（整串一起掃會被咖啡館攔截）"
+        assert cl.for_seller("測試乙").name == "百貨"
+        assert cl.for_seller("測試丙").name == "咖啡", "主業真的是咖啡館就歸咖啡"
+    print("✓ 稅籍行業：多重行業以主業優先")
+
+
+def test_eatery_declaration_merges():
+    """自創分類名要宣告才算現調；內建四類是聯集，清不掉。"""
+    from twcrawl.categories import Classifier
+
+    with TemporaryDirectory() as td:
+        td = Path(td)
+        declared = td / "categories.local.json"
+        declared.write_text(json.dumps(
+            {"rules": {"巷口麵店": "麵食"}, "eatery": ["麵食"]},
+            ensure_ascii=False), encoding="utf-8")
+        cl = Classifier(local_path=declared)
+        assert cl.for_seller("巷口麵店").eatery, "宣告過的自創分類名應算現調"
+        assert cl.for_seller("五十嵐測試店").eatery, \
+            "eatery 是聯集不是取代——內建四類不會被個人宣告清掉"
+
+        bare = td / "無宣告.json"
+        bare.write_text(json.dumps({"rules": {"巷口麵店": "麵食"}},
+                                   ensure_ascii=False), encoding="utf-8")
+        assert not Classifier(local_path=bare).for_seller("巷口麵店").eatery, \
+            "沒宣告就不算——這是補規則時要一起補的那一步"
+    print("✓ 餐飲現調：個人分類名可宣告、內建四類清不掉")
 
 
 def test_export_builds_dashboard():
@@ -710,17 +785,21 @@ def test_item_override_invoice_level():
     with TemporaryDirectory() as td:
         td = Path(td)
         ws = Workspace(td)
-        cl = Classifier(td / "沒有這個檔.json")
-        assert cl.item_category(["95無鉛汽油"]) == "加油"
-        assert cl.item_category(["九二無鉛汽油", "礦泉水"]) == "加油"
-        assert cl.item_category(["鮮奶", None, ""]) is None
+        cl = Classifier(ws.rules)
+        cos = "好市多股份有限公司"
+        assert cl.for_invoice(cos, ["95無鉛汽油"]).name == "加油"
+        assert cl.for_invoice(cos, ["九二無鉛汽油", "礦泉水"]).name == "加油"
+        assert cl.for_invoice(cos, ["鮮奶", None, ""]).name == "量販", \
+            "沒命中品項規則就落回店家分類"
 
         local = td / "categories.local.json"
         local.write_text(json.dumps({"item_rules": {"無鉛汽油": "個人品項"}},
                                     ensure_ascii=False), encoding="utf-8")
-        assert Classifier(local).item_category(
-            ["95無鉛汽油"]) == "個人品項", "品項規則個人層應優先"
+        assert Classifier(local).for_invoice(
+            cos, ["95無鉛汽油"]).name == "個人品項", "品項規則個人層應優先"
 
+        # 接線：發票層級要進 invoices／months，店家層級要進 sellers。
+        # 寫反了純測試看不出來，所以這裡留三條斷言。
         conn = db.connect(ws.db)
         try:
             db.upsert_invoices(conn, [
@@ -739,17 +818,14 @@ def test_item_override_invoice_level():
             ])
             payload = export.build_payload(conn, ws, cl)
             by_num = {v["num"]: v for v in payload["invoices"]}
-            assert by_num["CS1"]["category"] == "加油", "油品發票應覆寫成加油"
-            assert by_num["CS2"]["category"] == "量販", "其他發票不受影響"
+            assert by_num["CS1"]["category"] == "加油", "發票層級應寫進 invoices"
             assert payload["sellers"][0]["category"] == "量販", \
-                "店家業態分類不隨品項覆寫改變"
+                "店家層級應寫進 sellers"
             assert payload["months"][0]["byCategory"] == \
-                {"加油": 1200.0, "量販": 500.0}
-            cats = {c["name"]: c["total"] for c in payload["categories"]}
-            assert cats == {"加油": 1200.0, "量販": 500.0}
+                {"加油": 1200.0, "量販": 500.0}, "月彙總跟著發票層級走"
         finally:
             conn.close()  # Windows：先關連線才能清 TemporaryDirectory
-    print("✓ 品項覆寫：油品發票改分類、店家業態不動、彙總跟著發票走")
+    print("✓ 品項覆寫：發票層級與店家層級各寫對地方（export 接線）")
 
 
 def test_backup_roundtrip_and_excludes_state():
@@ -871,13 +947,16 @@ def test_export_industry_fallback_and_alias():
             conn.commit()
             payload = export.build_payload(conn, Workspace(td), Classifier(local))
             s = payload["sellers"][0]
-            assert s["category"] == "餐飲", "rules 沒中時應以稅籍行業後備分類"
+            # 接線：build_payload 必須自己把稅籍行業接上 Classifier，
+            # 不能指望呼叫端建構時就傳（serve 就是在拿到 conn 之前建的）
+            assert s["category"] == "餐飲", "export 應把稅籍行業接進分類鏈"
+            assert s["industry"] == "餐盒零售"
             assert s["name"] == "MYSTERY LAB" and s["legal"] == "神秘小舖"
             assert s["address"] == "台中市測試路1號"
             assert payload["uncategorized"] == [], "行業後備成功就不算未分類"
         finally:
             conn.close()
-    print("✓ export：稅籍行業後備分類與招牌名別名")
+    print("✓ export：稅籍行業接線、招牌名別名")
 
 
 def test_geocode_address_cleanup():
@@ -1042,6 +1121,14 @@ def test_local_rules_validation():
             raise AssertionError("item_rules 型別錯應該報錯")
         except SystemExit as e:
             assert "item_rules" in str(e), str(e)
+
+        eat = td / "eat.json"
+        eat.write_text('{ "eatery": "麵食" }', encoding="utf-8")
+        try:
+            load_local_config(eat)
+            raise AssertionError("eatery 型別錯應該報錯")
+        except SystemExit as e:
+            assert "eatery" in str(e), str(e)
     print("✓ 規則檔防呆：語法錯（含行號）、重複鍵、型別錯都給人話")
 
 
