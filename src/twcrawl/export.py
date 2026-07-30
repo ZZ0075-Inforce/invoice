@@ -17,9 +17,9 @@ from pathlib import Path
 
 from . import db
 from .categories import Classifier, UNCATEGORIZED
+from .workspace import Workspace
 
 TEMPLATE = Path(__file__).parent / "web" / "dashboard.html"
-MATCH_REPORT = Path("out/match_report.csv")
 
 # 食安頁的來源標示（顯示名與事件／監測型態）住在 sites/fda.py 的 SOURCE_META
 # ——抓取端要靠型態決定 since 適不適用，呈現端要靠它分頁，同一份知識兩邊都要。
@@ -122,12 +122,12 @@ def _detect_fixed(inv_rows: list[dict]) -> list[dict]:
     return sorted(found, key=lambda x: (not x["active"], -x["monthly"]))
 
 
-def build_payload(conn, classifier: Classifier | None = None,
-                  match_report: Path | str | None = None) -> dict:
+def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
+    """衍生儀表板資料。需要工作區的兩條路徑：比對報告與雲端獎清冊快取。"""
     # 稅籍行業後備一律在這裡接上：Classifier 可能是在拿到 conn 之前建的
     # （serve、測試都是），少接不會報錯、只會讓兩成店家靜默掉回未分類。
     industries = db.seller_industries(conn)
-    cl = (classifier or Classifier()).with_industries(industries)
+    cl = classifier.with_industries(industries)
     info = _seller_info(conn, cl, industries)
     top_items = _top_items(conn)
     invs = conn.execute(
@@ -208,7 +208,7 @@ def build_payload(conn, classifier: Classifier | None = None,
         s["rows"] += cnt
         s["lastSeen"] = max(s["lastSeen"] or "", str(last or "")[:10]) or None
 
-    report = Path(match_report) if match_report else MATCH_REPORT
+    report = ws.match_report
     match_counts: dict[str, int] | None = None
     match_rows: list[dict] | None = None
     if report.exists():
@@ -230,7 +230,7 @@ def build_payload(conn, classifier: Classifier | None = None,
     # 對獎：號碼已在 lottery_draws（lottery 指令維護），這裡即算即得。
     # data.js 只放中獎結果與期別摘要，不放中獎號碼本身（UI 用不到）。
     from . import lottery as lottery_mod
-    lot_raw = lottery_mod.check_invoices(conn)
+    lot_raw = lottery_mod.check_invoices(conn, ws.cache)
     lottery = {
         "uncovered": lot_raw["uncovered"],
         "periods": [
@@ -282,13 +282,10 @@ def build_payload(conn, classifier: Classifier | None = None,
     }
 
 
-def write_export(conn, out_dir: Path | str = Path("out"),
-                 classifier: Classifier | None = None,
+def write_export(conn, ws: Workspace, classifier: Classifier,
                  template: Path = TEMPLATE) -> Path:
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    payload = build_payload(conn, classifier,
-                            match_report=out_dir / "match_report.csv")
+    out_dir = ws.ensure_out()
+    payload = build_payload(conn, ws, classifier)
     data_js = out_dir / "data.js"
     data_js.write_text(
         "window.TWCRAWL_DATA = "

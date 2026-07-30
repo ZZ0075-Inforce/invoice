@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -33,17 +32,15 @@ def _safe(s: str, limit: int = 80) -> str:
 
 @dataclass
 class Capture:
-    """把一次瀏覽期間所有值得看的回應寫到 captures/<name>/ 底下。"""
+    """把一次瀏覽期間所有值得看的回應寫到指定的擷取目錄底下。
 
-    name: str
-    root: Path = field(init=False)
+    目錄由 `Workspace.new_capture(名稱)` 產生（已含 responses/ 與 downloads/）
+    ——命名與建目錄只有那一份定義，fetch 那條路徑用的是同一個。
+    """
+
+    root: Path
     seq: int = field(default=0, init=False)
     index: list[dict[str, Any]] = field(default_factory=list, init=False)
-
-    def __post_init__(self) -> None:
-        self.root = Path("captures") / f"{self.name}-{time.strftime('%Y%m%d-%H%M%S')}"
-        (self.root / "responses").mkdir(parents=True, exist_ok=True)
-        (self.root / "downloads").mkdir(parents=True, exist_ok=True)
 
     # -- 掛載 ----------------------------------------------------------------
     def attach(self, ctx: BrowserContext) -> None:

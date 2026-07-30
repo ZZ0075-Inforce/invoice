@@ -14,11 +14,12 @@ from pathlib import Path
 
 from . import db as db_mod
 from . import export
-from .categories import LOCAL_RULES_PATH, Classifier, load_local_config
+from .categories import Classifier, load_local_config
+from .workspace import Workspace
 
 
 def merge_rules(updates: dict[str, str],
-                local_path: Path | str = LOCAL_RULES_PATH,
+                local_path: Path | str,
                 aliases: dict[str, str] | None = None) -> int:
     """把 {店名: 分類}（與選填的 {登記名: 招牌名}）併入個人規則檔，
     保留 unnecessary 等其他欄位。"""
@@ -38,9 +39,7 @@ def merge_rules(updates: dict[str, str],
 
 
 class _Handler(SimpleHTTPRequestHandler):
-    db_path: str = ""
-    local_path: Path = LOCAL_RULES_PATH
-    out_dir: Path = Path("out")
+    ws: Workspace   # 由 make_server 合成子類別時注入（每請求一個實例，只能走類別屬性）
 
     def log_message(self, *args):  # GET 靜音；POST 成功時自己印
         pass
@@ -82,12 +81,10 @@ class _Handler(SimpleHTTPRequestHandler):
                              ' {"aliases": {"登記名": "招牌名"}}'})
             return
         try:
-            merge_rules(updates, self.local_path, aliases=aliases)
-            conn = db_mod.connect(self.db_path)  # 每個請求自己開，執行緒安全
+            merge_rules(updates, self.ws.rules, aliases=aliases)
+            conn = db_mod.connect(self.ws.db)  # 每個請求自己開，執行緒安全
             try:
-                export.write_export(
-                    conn, out_dir=self.out_dir,
-                    classifier=Classifier(local_path=self.local_path))
+                export.write_export(conn, self.ws, Classifier(self.ws.rules))
             finally:
                 conn.close()
         except SystemExit as e:  # 規則檔防呆的人話訊息，轉給頁面顯示
@@ -98,28 +95,20 @@ class _Handler(SimpleHTTPRequestHandler):
         self._json(200, {"ok": True, "count": len(updates)})
 
 
-def make_server(db_path, out_dir: Path | str = Path("out"), port: int = 8765,
-                local_path: Path | str = LOCAL_RULES_PATH) -> ThreadingHTTPServer:
-    out_dir = Path(out_dir)
-    handler = type("Handler", (_Handler,), {
-        "db_path": str(db_path),
-        "local_path": Path(local_path),
-        "out_dir": out_dir,
-    })
+def make_server(ws: Workspace, port: int = 8765) -> ThreadingHTTPServer:
+    handler = type("Handler", (_Handler,), {"ws": ws})
     return ThreadingHTTPServer(
-        ("127.0.0.1", port), partial(handler, directory=str(out_dir)))
+        ("127.0.0.1", port), partial(handler, directory=str(ws.ensure_out())))
 
 
-def serve(db_path, out_dir: Path | str = Path("out"), port: int = 8765,
-          local_path: Path | str = LOCAL_RULES_PATH,
+def serve(ws: Workspace, port: int = 8765,
           open_browser: bool = True) -> None:
-    conn = db_mod.connect(db_path)  # 起站先重生，保證頁面是最新資料
+    conn = db_mod.connect(ws.db)  # 起站先重生，保證頁面是最新資料
     try:
-        export.write_export(conn, out_dir=out_dir,
-                            classifier=Classifier(local_path=Path(local_path)))
+        export.write_export(conn, ws, Classifier(ws.rules))
     finally:
         conn.close()
-    httpd = make_server(db_path, out_dir, port, local_path)
+    httpd = make_server(ws, port)
     url = f"http://127.0.0.1:{httpd.server_address[1]}/dashboard.html"
     print(f"serve 模式：{url}")
     print("頁面上的「存檔」會寫回 categories.local.json 並重生資料；"

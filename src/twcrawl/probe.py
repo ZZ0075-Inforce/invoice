@@ -45,7 +45,7 @@ _INSPECT = r"""
 """
 
 
-def probe(page: Page, url: str, out_dir: Path = Path("out/probe")) -> Path:
+def probe(page: Page, url: str, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     xhr: list[dict] = []
     page.on(

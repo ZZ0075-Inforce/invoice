@@ -44,15 +44,15 @@ def _fda_fields(rec: dict) -> tuple[str | None, str | None]:
     return seller, product
 
 
-def run_match(conn, since: str | None = None, out_dir: Path = Path("out"),
-              classifier: Classifier | None = None) -> dict:
+def run_match(conn, report_path: Path, classifier: Classifier,
+              since: str | None = None) -> dict:
     """比對發票與 FDA 清單，寫出報告 CSV，回傳命中結果。
 
     只回傳不印摘要——判讀明細交給 format_result，由呼叫端決定要不要印。
     """
     # 稅籍行業後備與 export 走同一份讀取、同一條鏈——這裡曾是雙路 OR，
     # 會讓店家規則已經判定的店（便利商店、百貨）再被稅籍翻成餐飲而濾掉。
-    cl = (classifier or Classifier()).with_industries(db.seller_industries(conn))
+    cl = classifier.with_industries(db.seller_industries(conn))
 
     fda_rows = [
         (json.loads(data), src)
@@ -153,8 +153,8 @@ def run_match(conn, since: str | None = None, out_dir: Path = Path("out"),
     hits = seller_hits + prod_hits + news_hits
     report: Path | None = None
     if hits:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        report = out_dir / "match_report.csv"
+        report = Path(report_path)
+        report.parent.mkdir(parents=True, exist_ok=True)
         with report.open("w", encoding="utf-8-sig", newline="") as f:
             w = csv.DictWriter(f, fieldnames=list(hits[0].keys()))
             w.writeheader()

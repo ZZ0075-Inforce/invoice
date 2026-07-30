@@ -11,7 +11,7 @@
               稅籍行業後備 industries[店家名]        source="industry"
               都沒中                                 source="none"
 
-規則是「子字串 → 分類」，比對正規化後的名稱。個人規則放 repo 根目錄
+規則是「子字串 → 分類」，比對正規化後的名稱。個人規則放工作區根目錄
 `categories.local.json`（已 gitignore，勿入版控）：
 
     {
@@ -45,7 +45,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping
 
-LOCAL_RULES_PATH = Path("categories.local.json")
 UNCATEGORIZED = "未分類"
 
 # 通用層：台灣常見連鎖。發票賣方多為公司登記名（例：和德昌＝麥當勞、
@@ -170,7 +169,7 @@ def _industry_category(industry_text) -> str | None:
     return None
 
 
-def load_local_config(path: Path | str = LOCAL_RULES_PATH) -> dict:
+def load_local_config(path: Path | str) -> dict:
     """讀個人規則檔；手貼 JSON 難免貼壞，壞掉時給人話（哪一行、怎麼修）而非 traceback。"""
     p = Path(path)
     if not p.exists():
@@ -224,7 +223,7 @@ def _compile(personal: dict[str, str],
 
 
 class Classifier:
-    def __init__(self, local_path: Path | str = LOCAL_RULES_PATH,
+    def __init__(self, local_path: Path | str,
                  industries: Mapping[str, str | None] | None = None):
         personal: dict[str, str] = {}
         aliases: dict[str, str] = {}

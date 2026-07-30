@@ -102,8 +102,7 @@ class _Sink:
     """把回應存成與 capture 相同的目錄結構，好讓既有的 ingest 直接吃。"""
 
     def __init__(self, root: Path) -> None:
-        self.root = root
-        (root / "responses").mkdir(parents=True, exist_ok=True)
+        self.root = root   # 目錄由 Workspace.new_capture 產生，形狀只有一份定義
         self.index: list[dict] = []
         self.seq = 0
 
@@ -181,6 +180,7 @@ def _fetch_month(
 def fetch_range(
     ctx: BrowserContext,
     conn,
+    capture_root: Path,
     start: str,
     end: str,
     with_details: bool = True,
@@ -196,8 +196,7 @@ def fetch_range(
             "登入狀態可能已失效，請重跑 `twcrawl login`。"
         )
 
-    stamp = datetime.now(TPE).strftime("%Y%m%d-%H%M%S")
-    sink = _Sink(Path("captures") / f"einvoice-fetch-{stamp}")
+    sink = _Sink(capture_root)
 
     now = datetime.now(TPE)
     total_inv = 0

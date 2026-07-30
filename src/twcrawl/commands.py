@@ -8,8 +8,8 @@
 摘要由 cli.py 的格式化層印。長時間操作的即時進度（下載、逐頁、逐月）
 仍由底層 module 直接印——那是必要的回饋，不走回傳值。
 
-路徑沿用既有慣例（out_dir 之類的具名預設參數），沒有集中的路徑物件；
-那是另一件事。
+路徑一律來自 `Workspace`（CONTEXT.md「工作區」）：指令函式吃 ws，不吃
+CWD 錨定的預設值。`ws.out` 之類的推導只有工作區知道，指令層不重打一遍。
 
 純委派的指令（serve / bizreg / geocode / probe）刻意留在 cli.py 直接
 呼叫：包一層不會讓任何複雜度集中，只是多一層。
@@ -27,10 +27,12 @@ from typing import Callable
 
 from . import backup as backup_mod
 from . import export, handoff, lottery
-from .browser import browser_context, state_path
+from .browser import browser_context
+from .categories import Classifier
 from .match import run_match
 from .netcapture import Capture
 from .sites import einvoice, einvoice_fetch, fda
+from .workspace import Workspace
 
 # update 的 FDA 回溯天數。清單只需涵蓋近期公告；比對本身不受此限——
 # 一張舊發票照樣會命中今天才公告的下架品，所以 match 不吃這個 since。
@@ -41,19 +43,6 @@ EMPTY_DB_LOOKBACK_MONTHS = 5
 
 
 # ---- 共用小工具 ----------------------------------------------------------
-
-def latest_capture(captures_dir: Path | str = Path("captures")) -> Path:
-    """最近一次擷取目錄。
-
-    按 mtime 取，不按檔名字典序：capture 產生 `einvoice-<時間戳>`、fetch
-    產生 `einvoice-fetch-<時間戳>`，字典序下 "einvoice-f" 恆大於
-    "einvoice-2"，永遠選不到比較新的人工 capture。
-    """
-    roots = [p for p in Path(captures_dir).glob("einvoice-*") if p.is_dir()]
-    if not roots:
-        raise SystemExit("找不到任何擷取結果，請先執行 `twcrawl capture`。")
-    return max(roots, key=lambda p: p.stat().st_mtime)
-
 
 def auto_month_range(last_inv_date: str | None, today: _dt.date) -> tuple[str, str]:
     """update 的抓取區間：從資料庫最新發票的月份（重抓補漏，upsert 冪等）
@@ -86,56 +75,73 @@ def open_dashboard(path: Path | str) -> None:
         print(f"！無法自動開啟儀表板（{e}），請自行開 {path}")
 
 
-def _require_session() -> None:
-    if not state_path(einvoice.SESSION).exists():
+def _require_session(ws: Workspace) -> None:
+    if not ws.state_path(einvoice.SESSION).exists():
         raise SystemExit("找不到登入狀態，請先執行 `twcrawl login`。")
+
+
+def _classifier(ws: Workspace) -> Classifier:
+    """建分類器；沒有個人規則檔就講一句。
+
+    以前規則檔不存在是完全靜默的——在錯的目錄跑 export，個人規則全部消失
+    而畫面上看不出來。函式庫維持不印字，提示由指令層發出。
+    """
+    if not ws.rules.exists():
+        print(f"！沒有個人規則（{ws.rules} 不存在）"
+              "——店家將只靠通用規則與稅籍行業分類")
+    return Classifier(ws.rules)
 
 
 # ---- 指令 ----------------------------------------------------------------
 
-def cmd_login(*, headed: bool = True, slow_mo: int = 0) -> dict:
-    with browser_context(session=einvoice.SESSION, headed=headed,
+def cmd_login(ws: Workspace, *, headed: bool = True, slow_mo: int = 0) -> dict:
+    session_file = ws.state_path(einvoice.SESSION)
+    with browser_context(session_file=session_file, headed=headed,
                          slow_mo=slow_mo) as ctx:
-        einvoice.login(ctx)
-    return {"session": str(state_path(einvoice.SESSION))}
+        einvoice.login(ctx, session_file)
+    return {"session": str(session_file)}
 
 
-def cmd_capture(conn, *, headed: bool = True) -> dict:
-    cap = Capture("einvoice")
-    with browser_context(session=einvoice.SESSION, headed=headed) as ctx:
+def cmd_capture(conn, ws: Workspace, *, headed: bool = True) -> dict:
+    cap = Capture(ws.new_capture("einvoice"))
+    with browser_context(session_file=ws.state_path(einvoice.SESSION),
+                         headed=headed) as ctx:
         root = einvoice.capture(ctx, cap)
     return {"dir": str(root), **einvoice.ingest(root, conn)}
 
 
-def cmd_fetch(conn, date_from: str, date_to: str, *,
+def cmd_fetch(conn, ws: Workspace, date_from: str, date_to: str, *,
               with_details: bool = True, headed: bool = False) -> dict:
     # 前置檢查放在這裡，subcommand 與 update 才會一致地快速失敗——
     # 少了它，`update --no-login` 會一路跑到 einvoice_fetch 才死。
-    _require_session()
-    with browser_context(session=einvoice.SESSION, headed=headed) as ctx:
-        return einvoice_fetch.fetch_range(ctx, conn, date_from, date_to,
-                                          with_details=with_details)
+    _require_session(ws)
+    with browser_context(session_file=ws.state_path(einvoice.SESSION),
+                         headed=headed) as ctx:
+        return einvoice_fetch.fetch_range(
+            ctx, conn, ws.new_capture("einvoice-fetch"), date_from, date_to,
+            with_details=with_details)
 
 
-def cmd_ingest(conn, *, capture_dir: Path | str | None = None) -> dict:
-    root = Path(capture_dir) if capture_dir else latest_capture()
+def cmd_ingest(conn, ws: Workspace, *,
+               capture_dir: Path | str | None = None) -> dict:
+    root = Path(capture_dir) if capture_dir else ws.latest_capture()
     print(f"解析 {root}")
     return {"dir": str(root), **einvoice.ingest(root, conn)}
 
 
-def cmd_handoff(*, capture_dir: Path | str | None = None,
-                out_dir: Path | str = Path("out")) -> dict:
-    root = Path(capture_dir) if capture_dir else latest_capture()
+def cmd_handoff(ws: Workspace, *,
+                capture_dir: Path | str | None = None) -> dict:
+    root = Path(capture_dir) if capture_dir else ws.latest_capture()
     text = handoff.summarize(root)
-    out_path = Path(out_dir) / f"handoff_{root.name}.txt"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    ws.ensure_out()
+    out_path = ws.handoff_path(root.name)
     out_path.write_text(text, encoding="utf-8")
     return {"dir": str(root), "text": text, "path": str(out_path)}
 
 
-def cmd_fda(conn, *, source: str = "all", url: str | None = None,
-            since: str | None = None, max_pages: int = 500,
-            headed: bool = False, out_dir: Path | str = Path("out")) -> dict:
+def cmd_fda(conn, ws: Workspace, *, source: str = "all",
+            url: str | None = None, since: str | None = None,
+            max_pages: int = 500, headed: bool = False) -> dict:
     if url:
         selected = {"custom": url}
     elif source == "all":
@@ -144,7 +150,7 @@ def cmd_fda(conn, *, source: str = "all", url: str | None = None,
         selected = {source: fda.SOURCES[source]}
 
     results: dict[str, dict] = {}
-    with browser_context(session=None, headed=headed) as ctx:
+    with browser_context(session_file=None, headed=headed) as ctx:
         page = ctx.new_page()
         for name, src_url in selected.items():
             print(f"\n=== 來源：{name} ===")
@@ -153,32 +159,31 @@ def cmd_fda(conn, *, source: str = "all", url: str | None = None,
             src_since = since if (since and fda.is_feed(name)) else None
             if since and not src_since:
                 print(f"  （{name} 非 feed 型來源，不適用回溯日期，整份擷取）")
-            results[name] = fda.fetch(page, conn, url=src_url,
+            results[name] = fda.fetch(page, conn, ws.out, url=src_url,
                                       max_pages=max_pages, since=src_since,
-                                      name=name, out_dir=Path(out_dir))
+                                      name=name)
     return {"sources": results}
 
 
-def cmd_match(conn, *, since: str | None = None,
-              out_dir: Path | str = Path("out")) -> dict:
-    return run_match(conn, since=since, out_dir=Path(out_dir))
+def cmd_match(conn, ws: Workspace, *, since: str | None = None) -> dict:
+    return run_match(conn, ws.match_report, _classifier(ws), since=since)
 
 
-def cmd_lottery(conn, *, fetch: bool = True, cloud: bool = True) -> dict:
-    return lottery.run_lottery(conn, fetch=fetch, cloud=cloud)
+def cmd_lottery(conn, ws: Workspace, *, fetch: bool = True,
+                cloud: bool = True) -> dict:
+    return lottery.run_lottery(conn, ws.cache, fetch=fetch, cloud=cloud)
 
 
-def cmd_export(conn, *, out_dir: Path | str = Path("out"),
-               open_browser: bool = True) -> dict:
-    dash = export.write_export(conn, out_dir=Path(out_dir))
+def cmd_export(conn, ws: Workspace, *, open_browser: bool = True) -> dict:
+    dash = export.write_export(conn, ws, _classifier(ws))
     if open_browser:
         open_dashboard(dash)
     return {"dashboard": str(dash)}
 
 
-def cmd_backup(password: str, *, db_path: Path | str,
-               out_dir: Path | str = backup_mod.BACKUP_DIR) -> dict:
-    path = backup_mod.make_backup(password, db_path=db_path, out_dir=out_dir)
+def cmd_backup(password: str, ws: Workspace, *,
+               out_dir: Path | str | None = None) -> dict:
+    path = backup_mod.make_backup(password, ws, out_dir=out_dir)
     return {"path": str(path)}
 
 
@@ -234,10 +239,9 @@ def run_steps(steps: list[Step]) -> dict:
             "skipped": skipped}
 
 
-def update_steps(conn, *, db_path: Path | str, login: bool = True,
+def update_steps(conn, ws: Workspace, *, login: bool = True,
                  backup: bool = True, cloud: bool = True,
                  open_browser: bool = True,
-                 out_dir: Path | str = Path("out"),
                  password: str | None = None,
                  today: _dt.date | None = None) -> list[Step]:
     """組出 update 的七步。
@@ -257,20 +261,19 @@ def update_steps(conn, *, db_path: Path | str, login: bool = True,
             "backup",
             skip_reason="沒有密碼來源（非互動且未設 TWCRAWL_BACKUP_PASSWORD）")
     else:
-        backup_step = Step(
-            "backup", lambda: cmd_backup(password, db_path=db_path))
+        backup_step = Step("backup", lambda: cmd_backup(password, ws))
 
     return [
         Step("login（請在瀏覽器完成登入）",
-             lambda: cmd_login(),
+             lambda: cmd_login(ws),
              skip_reason="" if login else "--no-login"),
         Step(f"fetch {d_from} ～ {d_to}",
-             lambda: cmd_fetch(conn, d_from, d_to)),
+             lambda: cmd_fetch(conn, ws, d_from, d_to)),
         Step(f"fda（feed 型來源回溯至 {since}）",
-             lambda: cmd_fda(conn, since=since, out_dir=out_dir)),
-        Step("match", lambda: cmd_match(conn, out_dir=out_dir)),
-        Step("lottery", lambda: cmd_lottery(conn, cloud=cloud)),
-        Step("export", lambda: cmd_export(conn, out_dir=out_dir,
+             lambda: cmd_fda(conn, ws, since=since)),
+        Step("match", lambda: cmd_match(conn, ws)),
+        Step("lottery", lambda: cmd_lottery(conn, ws, cloud=cloud)),
+        Step("export", lambda: cmd_export(conn, ws,
                                           open_browser=open_browser)),
         backup_step,
     ]

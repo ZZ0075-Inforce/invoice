@@ -38,7 +38,6 @@ CLOUD_PRIZES = {  # PDF 檔名尾碼 → (獎名, 金額)
     "AI_E": ("雲端八百元獎", 800),
     "AI_D": ("雲端五百元獎", 500),
 }
-CACHE_DIR = Path("out/cache")
 
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
@@ -213,7 +212,7 @@ def _download_pdf_numbers(url: str, dest: Path) -> int:
     return n
 
 
-def refresh_cloud(cache_dir: Path = CACHE_DIR) -> list[str]:
+def refresh_cloud(cache_dir: Path) -> list[str]:
     """抓雲端專屬獎清冊入快取；回傳本次新建的快取檔名。
 
     只取「已排序」版 PDF（小 2 成）；同期同獎已有快取就跳過——官方
@@ -250,7 +249,7 @@ def refresh_cloud(cache_dir: Path = CACHE_DIR) -> list[str]:
 
 
 def _cloud_hits(period: str, full_nums: set[str],
-                cache_dir: Path = CACHE_DIR) -> dict[str, tuple[str, int]]:
+                cache_dir: Path) -> dict[str, tuple[str, int]]:
     """該期雲端獎比對：完整字軌號碼 ∈ 清冊。回 {完整號碼: (獎名, 金額)}。"""
     hits: dict[str, tuple[str, int]] = {}
     if not full_nums:
@@ -283,8 +282,7 @@ def refresh_draws(conn: sqlite3.Connection) -> list[str]:
     return got
 
 
-def check_invoices(conn: sqlite3.Connection,
-                   cache_dir: Path = CACHE_DIR) -> dict:
+def check_invoices(conn: sqlite3.Connection, cache_dir: Path) -> dict:
     """庫內發票 × 庫內號碼逐期對獎（純讀取；結果即算即得，不落地）。
 
     傳統獎比末 8 碼；雲端專屬獎比完整字軌號碼（讀 gz 快取，沒快取就
@@ -343,9 +341,8 @@ def check_invoices(conn: sqlite3.Connection,
     return {"periods": periods, "uncovered": n_out}
 
 
-def run_lottery(conn: sqlite3.Connection, fetch: bool = True,
-                cloud: bool = True,
-                cache_dir: Path = CACHE_DIR) -> dict:
+def run_lottery(conn: sqlite3.Connection, cache_dir: Path,
+                fetch: bool = True, cloud: bool = True) -> dict:
     """（可選）更新中獎號碼與雲端清冊，然後比對庫內發票。
 
     只回傳結果，摘要交給 format_result——呼叫端才知道要不要印、印在哪

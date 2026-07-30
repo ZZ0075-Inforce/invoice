@@ -10,14 +10,15 @@ from __future__ import annotations
 import argparse
 import contextlib
 import sys
+from pathlib import Path
 
-from . import backup as backup_mod
 from . import bizreg, commands, db, geocode
 from . import lottery as lottery_mod
 from . import match as match_mod
 from .browser import browser_context
 from .probe import probe as run_probe
 from .sites import fda
+from .workspace import Workspace
 
 
 @contextlib.contextmanager
@@ -34,7 +35,6 @@ def _build_parser() -> argparse.ArgumentParser:
     # 只取摘要那一行；後面幾段是給讀原始碼的人看的，不該倒進 --help
     ap = argparse.ArgumentParser(prog="twcrawl",
                                  description=(__doc__ or "").split("\n\n")[0])
-    ap.add_argument("--db", default=str(db.DEFAULT_DB), help="SQLite 檔案路徑")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p_login = sub.add_parser("login", help="開啟瀏覽器，由人工完成電子發票平台登入並保存 session")
@@ -115,7 +115,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_bak = sub.add_parser(
         "backup", help="產生 AES-256 加密備份包（僅密文可上雲，見 docs/adr/0001）"
     )
-    p_bak.add_argument("--out", default=str(backup_mod.BACKUP_DIR), help="備份包輸出目錄")
+    p_bak.add_argument("--out", default=None,
+                       help="備份包輸出目錄（預設工作區的 out/backup；"
+                            "可指向工作區外，例如雲端同步目錄）")
 
     p_upd = sub.add_parser(
         "update",
@@ -137,73 +139,77 @@ def _build_parser() -> argparse.ArgumentParser:
     return ap
 
 
-def _dispatch(args: argparse.Namespace) -> int:
+def _dispatch(args: argparse.Namespace, ws: Workspace) -> int:
     if args.cmd == "login":
-        commands.cmd_login(slow_mo=args.slow_mo)
+        commands.cmd_login(ws, slow_mo=args.slow_mo)
         return 0
 
     if args.cmd == "capture":
-        with _db(args.db) as conn:
-            commands.cmd_capture(conn)
+        with _db(ws.db) as conn:
+            commands.cmd_capture(conn, ws)
         return 0
 
     if args.cmd == "fetch":
-        with _db(args.db) as conn:
-            commands.cmd_fetch(conn, args.date_from, args.date_to,
+        with _db(ws.db) as conn:
+            commands.cmd_fetch(conn, ws, args.date_from, args.date_to,
                                with_details=not args.no_details,
                                headed=args.headed)
         return 0
 
     if args.cmd == "ingest":
-        with _db(args.db) as conn:
-            commands.cmd_ingest(conn, capture_dir=args.dir)
+        with _db(ws.db) as conn:
+            commands.cmd_ingest(conn, ws, capture_dir=args.dir)
         return 0
 
     if args.cmd == "handoff":
-        res = commands.cmd_handoff(capture_dir=args.dir)
+        res = commands.cmd_handoff(ws, capture_dir=args.dir)
         print(res["text"])
         print(f"\n（已同步存到 {res['path']}）")
         return 0
 
     if args.cmd == "fda":
-        with _db(args.db) as conn:
-            commands.cmd_fda(conn, source=args.source, url=args.url,
+        with _db(ws.db) as conn:
+            commands.cmd_fda(conn, ws, source=args.source, url=args.url,
                              since=args.since, max_pages=args.max_pages,
                              headed=args.headed)
         return 0
 
     if args.cmd == "match":
-        with _db(args.db) as conn:
-            res = commands.cmd_match(conn, since=args.since)
+        ws.require_db()
+        with _db(ws.db) as conn:
+            res = commands.cmd_match(conn, ws, since=args.since)
         print(match_mod.format_result(res))
         return 0
 
     if args.cmd == "lottery":
+        ws.require_db()
         print("=== 統一發票對獎 ===")
-        with _db(args.db) as conn:
-            res = commands.cmd_lottery(conn, fetch=not args.offline,
+        with _db(ws.db) as conn:
+            res = commands.cmd_lottery(conn, ws, fetch=not args.offline,
                                        cloud=not args.no_cloud)
         print(lottery_mod.format_result(res))
         return 0
 
     if args.cmd == "export":
-        with _db(args.db) as conn:
-            commands.cmd_export(conn, open_browser=not args.no_open)
+        ws.require_db()
+        with _db(ws.db) as conn:
+            commands.cmd_export(conn, ws, open_browser=not args.no_open)
         return 0
 
     if args.cmd == "backup":
+        ws.require_db()
         pw = commands.backup_password()
         if not pw:
             raise SystemExit("需要備份密碼（互動輸入或設 TWCRAWL_BACKUP_PASSWORD）。")
-        commands.cmd_backup(pw, db_path=args.db, out_dir=args.out)
+        commands.cmd_backup(pw, ws, out_dir=args.out)
         return 0
 
     if args.cmd == "update":
         # 密碼在組裝步驟時就問，不是跑了一小時之後才卡在提示上
         pw = None if args.no_backup else commands.backup_password()
-        with _db(args.db) as conn:
+        with _db(ws.db) as conn:
             steps = commands.update_steps(
-                conn, db_path=args.db,
+                conn, ws,
                 login=not args.no_login, backup=not args.no_backup,
                 cloud=not args.no_cloud, open_browser=not args.no_open,
                 password=pw,
@@ -214,23 +220,27 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     # 以下是純委派：包一層不會讓任何複雜度集中，所以直接呼叫底層
     if args.cmd == "serve":
+        ws.require_db()
         from . import serve as serve_mod
-        serve_mod.serve(args.db, port=args.port, open_browser=not args.no_open)
+        serve_mod.serve(ws, port=args.port, open_browser=not args.no_open)
         return 0
 
     if args.cmd == "bizreg":
-        with _db(args.db) as conn:
-            bizreg.refresh(conn, force=args.force)
+        with _db(ws.db) as conn:
+            bizreg.refresh(conn, ws.bizreg_cache, force=args.force)
         return 0
 
     if args.cmd == "geocode":
-        with _db(args.db) as conn:
+        ws.require_db()
+        with _db(ws.db) as conn:
             geocode.refresh(conn)
         return 0
 
     if args.cmd == "probe":
-        with browser_context(session=args.session, headed=args.headed) as ctx:
-            run_probe(ctx.new_page(), args.url)
+        session_file = ws.state_path(args.session) if args.session else None
+        with browser_context(session_file=session_file,
+                             headed=args.headed) as ctx:
+            run_probe(ctx.new_page(), args.url, ws.probe_out)
         return 0
 
     return 1
@@ -238,8 +248,10 @@ def _dispatch(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    # 工作區＝目前目錄；所有路徑由它推出（CONTEXT.md「工作區」）
+    ws = Workspace(Path.cwd())
     try:
-        return _dispatch(args)
+        return _dispatch(args, ws)
     except KeyboardInterrupt:
         # browser.wait_for_operator 的人工中止也走這條
         print("\n已中止。")

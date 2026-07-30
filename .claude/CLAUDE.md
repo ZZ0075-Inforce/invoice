@@ -16,7 +16,7 @@ FDA 目前接三個來源：中聯油脂案專區強制下架清單（edible_oil
 ```
 pip install -e .                      # 一律 editable；PyPI 上的 twcrawl 是無關的舊套件
 python -m playwright install chromium # playwright 指令找不到時用這個
-python tests/test_twcrawl.py          # 測試（40/40，不用 pytest）
+python tests/test_twcrawl.py          # 測試（42/42，不用 pytest）
 
 # 每月例行（一鍵；fetch 區間自動推算、FDA 回溯 90 天只給 feed 型來源）
 twcrawl update                        # login→fetch→fda→match→lottery→export→backup
@@ -57,20 +57,37 @@ twcrawl probe <url>                   # 頁面結構偵察報告
   個人店家名（範例一律假名；連鎖名當通用設計範例可）與「使用者買了◯◯」級
   的實例；純筆數統計可。推送前掃 `origin/main..HEAD` 的全部 diff 與 commit
   訊息。本地分支 `private-history` 含個資舊歷史，**永不推向任何遠端**。
+- **路徑一律由工作區推出**（2026-07-30）：`Workspace(Path.cwd())` 是唯一來源，
+  沒有 `--db`、沒有 `--root`、沒有路徑環境變數，模組也不再有 CWD 錨定的常數
+  （`DEFAULT_DB`／`BACKUP_DIR`／`CACHE_DIR`／`LOCAL_RULES_PATH`／`STATE_DIR`／
+  `MATCH_REPORT` 全刪；`export.TEMPLATE` 是 package-relative，留）。要換工作區
+  就 cd 過去。單一路徑的函式吃那條路徑（簽章才說得出它碰什麼），多路徑的
+  （export／serve／backup）吃 ws。詞彙見 CONTEXT.md「工作區」。
 
 ## 架構
 
 ```
 src/twcrawl/
-├── cli.py        argv 解析＋dispatch＋格式化，指令內容不在這（見 commands.py）
-├── commands.py   指令層（ADR-0003）：每個指令一個吃具名參數、回傳 dict、不印
-│                 摘要的 cmd_* 函式，`twcrawl <cmd>` 與 update 的第 N 步呼叫
+├── workspace.py  工作區：所有本機路徑的單一來源（CONTEXT.md「工作區」）。
+│                 Workspace(root)——CLI 傳 Path.cwd()、測試傳 tmpdir，這兩個
+│                 adapter 就是 root 必須是參數的理由（以前測試只能 os.chdir）。
+│                 除了路徑，也收佈局知識：ensure_out/new_capture（命名＋建
+│                 responses/downloads，capture 與 fetch 共用一份）／
+│                 latest_capture（依 mtime，不是字典序——字典序會讓
+│                 einvoice-fetch-* 恆勝 einvoice-2*）／require_db（讀取型
+│                 指令的前置：不是工作區就講人話，不默默生空資料庫）。
+│                 這個模組不 import 其他 twcrawl 模組
+├── cli.py        argv 解析＋dispatch＋格式化，指令內容不在這（見 commands.py）；
+│                 建 ws＝Workspace(cwd) 往下傳，_db 保證連線關閉
+├── commands.py   指令層（ADR-0003）：每個指令一個吃 ws 與具名參數、回傳 dict、
+│                 不印摘要的 cmd_* 函式，`twcrawl <cmd>` 與 update 的第 N 步呼叫
 │                 同一個、接線只有一份；update = Step 清單＋run_steps（一步
 │                 失敗記錄後續跑、跳過仍佔編號、SystemExit 要攔而
 │                 KeyboardInterrupt 不攔）。純委派的 serve/bizreg/geocode/probe
 │                 刻意留在 cli.py 直接呼叫——包一層不會讓複雜度集中
 ├── browser.py    Playwright session、wait_for_operator（pump！、中止拋
-│                 KeyboardInterrupt 好與「步驟失敗」分辨）、storage_state
+│                 KeyboardInterrupt 好與「步驟失敗」分辨）、storage_state；
+│                 session 以檔案路徑傳入，這個模組不知道工作區在哪
 ├── netcapture.py 攔截 XHR/下載 → captures/（隨錄隨寫 index.json）
 ├── tables.py     通用表格擷取 + 分頁（含截斷警告）
 ├── db.py         SQLite schema 與 upsert（全部冪等，重跑安全）＋ seller_industries
@@ -287,6 +304,15 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   FDA 的 `since` 改成只給 feed 型來源（事件型清單不依日期排序，拿去停會
   任意截斷；型態隨之從 export 搬進 `fda.SOURCE_META`）。CLI 表面向後相容，
   只新增 `update --no-cloud`。測試 35→40
+- ✅ 工作區模組（2026-07-30，架構檢視 candidate 2；最後落地，吃下前兩支）：
+  22 個散在 12 個模組的 CWD 相對字面路徑收進 `workspace.py`，`commands.py` 的
+  `cmd_*` 改吃 ws；`--db` 移除、`backup --out` 保留（可指向雲端同步目錄）。
+  讀取型指令先 `ws.require_db()`——跑錯目錄會講人話，不再默默生一份空儀表板。
+  順帶修掉：`ingest` 印模組常數而非實際資料庫、備份包內路徑改相對工作區
+  （Windows 磁碟機字母的退路因此不可達可刪）、測試 runner 只抓 `Exception`
+  所以逃出的 `SystemExit` 會靜默中止整輪。測試 42/42（新增工作區與 CLI
+  端到端各一；兩個 `os.chdir` 測試不再需要 chdir；備份測試補上 `state/`，
+  ADR-0001 的紅線第一次真的被驗證）
 - ⬜ 緩辦（要做先問）：CSV 匯出、分類趨勢圖、地圖店家搜尋
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive
