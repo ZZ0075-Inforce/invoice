@@ -93,6 +93,21 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def seller_industries(conn: sqlite3.Connection) -> dict[str, str]:
+    """店家名 → 稅籍行業名稱（供 Classifier 的行業後備層用）。
+
+    每家店一個答案：統編取該店家名下任一非空的（SQLite 的 max 忽略 NULL）。
+    半數發票不帶統編，逐張查會讓同一家店在不同發票上得到不同分類——
+    這裡收斂成一次查詢，export 與 match 共用，兩邊不可能再分岔。
+    """
+    return {name: industry for name, industry in conn.execute(
+        "select v.seller_name, r.industry from ("
+        "  select seller_name, max(seller_ban) as ban from invoices"
+        "  where seller_name is not null group by seller_name) v"
+        " join biz_registry r on r.ban = trim(v.ban)"
+        " where r.industry is not null")}
+
+
 def upsert_invoices(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> int:
     sql = """
     INSERT INTO invoices (inv_num, inv_date, seller_name, seller_ban, amount,
