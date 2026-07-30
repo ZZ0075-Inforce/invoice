@@ -16,10 +16,12 @@ FDA 目前接三個來源：中聯油脂案專區強制下架清單（edible_oil
 ```
 pip install -e .                      # 一律 editable；PyPI 上的 twcrawl 是無關的舊套件
 python -m playwright install chromium # playwright 指令找不到時用這個
-python tests/test_twcrawl.py          # 測試（31/31，不用 pytest）
+python tests/test_twcrawl.py          # 測試（37/37，不用 pytest）
 
-# 每月例行（一鍵；fetch 區間自動推算、FDA 回溯 90 天）
+# 每月例行（一鍵；fetch 區間自動推算、FDA 回溯 90 天只給 feed 型來源）
 twcrawl update                        # login→fetch→fda→match→lottery→export→backup
+                                      #   一步失敗記錄後續跑、結尾彙總、回非零退出碼
+                                      #   --no-login/--no-backup/--no-open/--no-cloud
 
 # 分步驟
 twcrawl login                         # 人工登入（token 約數小時失效，失效才需重跑）
@@ -60,8 +62,15 @@ twcrawl probe <url>                   # 頁面結構偵察報告
 
 ```
 src/twcrawl/
-├── cli.py        指令進入點
-├── browser.py    Playwright session、wait_for_operator（pump！）、storage_state
+├── cli.py        argv 解析＋dispatch＋格式化，指令內容不在這（見 commands.py）
+├── commands.py   指令層（ADR-0003）：每個指令一個吃具名參數、回傳 dict、不印
+│                 摘要的 cmd_* 函式，`twcrawl <cmd>` 與 update 的第 N 步呼叫
+│                 同一個、接線只有一份；update = Step 清單＋run_steps（一步
+│                 失敗記錄後續跑、跳過仍佔編號、SystemExit 要攔而
+│                 KeyboardInterrupt 不攔）。純委派的 serve/bizreg/geocode/probe
+│                 刻意留在 cli.py 直接呼叫——包一層不會讓複雜度集中
+├── browser.py    Playwright session、wait_for_operator（pump！、中止拋
+│                 KeyboardInterrupt 好與「步驟失敗」分辨）、storage_state
 ├── netcapture.py 攔截 XHR/下載 → captures/（隨錄隨寫 index.json）
 ├── tables.py     通用表格擷取 + 分頁（含截斷警告）
 ├── db.py         SQLite schema 與 upsert（全部冪等，重跑安全）
@@ -123,7 +132,12 @@ src/twcrawl/
 └── sites/
     ├── einvoice.py        ALIASES 欄位別名（2026-07-27 已依實測校正）、CSV/JSON/明細解析、ingest
     ├── einvoice_fetch.py  fetch 逐月重放 API（呼叫走頁內 fetch()，token 即取即用不落地）
-    └── fda.py             三來源下架/回收/警訊清單（?idx= 分頁優先，點擊後備）
+    └── fda.py             三來源下架/回收/警訊清單（?idx= 分頁優先，點擊後備）。
+                           SOURCE_META 帶顯示名與事件/監測型態——抓取端靠它決定
+                           since 適不適用、食安頁靠它分頁。**since 只給 feed 型
+                           （監測）來源**：事件型清單不依日期排序，它唯一含
+                           「日期」的欄位是產品「有效日期」，拿去停會任意截斷
+                           整份下架清單，所以 _crawl_by_idx 刻意沒有 stop_when
 ```
 
 ## 站台實測事實（2026-07 校正）
@@ -237,6 +251,13 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   查詢頁店家排行/下拉改由發票聚合，跨分類店家與磚的金額一致。實測庫內
   油品發票全數改歸加油；測試 32/32。完整品項層級分類（每品項各自歸類）
   維持緩辦，等品名正規化有解
+- ✅ 指令層 commands.py（2026-07-30，架構檢視 candidate #3；決策見 ADR-0003）：
+  15 個指令 body 從 `main()` 搬出 10 個，update 變成 Step 清單。修掉 update
+  與 subcommand 的五處漂移（登入前置檢查、`--no-cloud`、max_pages 兩份、
+  備份密碼政策、步數手打）；一步失敗改成記錄後續跑、回非零退出碼；人工中止
+  改拋 KeyboardInterrupt 才分辨得出「Ctrl+C」與「步驟掛了」；`_latest_capture`
+  改按 mtime 取（原字典序下 `einvoice-fetch-*` 恆勝 `einvoice-2*`）。
+  CLI 表面向後相容，只新增 `update --no-cloud`。測試 32→37
 - ⬜ 緩辦（要做先問）：CSV 匯出、分類趨勢圖、地圖店家搜尋
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

@@ -872,11 +872,171 @@ def test_geocode_address_cleanup():
 def test_update_auto_month_range():
     import datetime as dtm
 
-    from twcrawl.cli import _auto_month_range
+    from twcrawl.commands import auto_month_range
 
-    assert _auto_month_range("2026-06-15", dtm.date(2026, 7, 27)) == ("2026-06", "2026-07")
-    assert _auto_month_range(None, dtm.date(2026, 2, 10)) == ("2025-09", "2026-02")
+    assert auto_month_range("2026-06-15", dtm.date(2026, 7, 27)) == ("2026-06", "2026-07")
+    assert auto_month_range(None, dtm.date(2026, 2, 10)) == ("2025-09", "2026-02")
     print("✓ update 自動月份區間（重抓最新月補漏、空庫回推 5 個月）")
+
+
+def test_run_steps_records_and_continues():
+    """一步失敗不該拖死後面的步驟；Ctrl+C 則要停掉整輪。"""
+    from twcrawl.commands import Step, run_steps
+
+    seen: list[str] = []
+
+    def ok(name):
+        def _run():
+            seen.append(name)
+            return {"who": name}
+        return _run
+
+    def boom():
+        seen.append("boom")
+        # SystemExit 是這個 codebase 的主要錯誤通道（fda、einvoice_fetch、
+        # backup…），`except Exception` 攔不到——runner 必須攔得住
+        raise SystemExit("來源掛了")
+
+    summary = run_steps([
+        Step("a", ok("a")),
+        Step("b", boom),
+        Step("c", ok("c")),
+        Step("d", skip_reason="--no-d"),
+    ])
+
+    assert seen == ["a", "boom", "c"], f"失敗的下一步必須照跑：{seen}"
+    assert summary["total"] == 4, "跳過的步驟仍佔一個編號"
+    assert summary["results"]["a"] == {"who": "a"}
+    assert "b" not in summary["results"], "失敗的步驟不該留下結果"
+    assert [f.label for f in summary["failed"]] == ["b"]
+    assert summary["failed"][0].detail == "來源掛了"
+    assert [s.label for s in summary["skipped"]] == ["d"]
+    assert summary["skipped"][0].detail == "--no-d"
+
+    def interrupt():
+        raise KeyboardInterrupt
+
+    try:
+        run_steps([Step("x", interrupt), Step("y", ok("y"))])
+        raise AssertionError("KeyboardInterrupt 應該中止整輪")
+    except KeyboardInterrupt:
+        pass
+    assert "y" not in seen, "人工中止後不該再跑下一步"
+    print("✓ update 步驟 runner（失敗續跑、跳過佔號、Ctrl+C 中止整輪）")
+
+
+def test_update_steps_assembly():
+    """旗標怎麼對應到七步：區間與回溯日期進標籤，跳過的仍佔編號。"""
+    import datetime as dtm
+
+    from twcrawl.commands import update_steps
+
+    with TemporaryDirectory() as d:
+        dbf = Path(d) / "t.sqlite"
+        conn = db.connect(dbf)
+        try:
+            db.upsert_invoices(conn, [{
+                "inv_num": "AA1", "inv_date": "2026-06-03",
+                "seller_name": "測試商行", "amount": 100.0,
+            }])
+            today = dtm.date(2026, 7, 30)
+
+            full = update_steps(conn, db_path=dbf, password="pw", today=today)
+            assert len(full) == 7, "七步"
+            assert full[1].label == "fetch 2026-06 ～ 2026-07", full[1].label
+            # FDA 回溯 90 天，且只對 feed 型來源有意義
+            assert "2026-05-01" in full[2].label, full[2].label
+            assert not any(s.skip_reason for s in full), "全開時不該有跳過"
+
+            partial_ = update_steps(conn, db_path=dbf, login=False,
+                                    backup=False, today=today)
+            assert len(partial_) == 7, "跳過的步驟仍佔編號"
+            assert partial_[0].skip_reason == "--no-login"
+            assert partial_[-1].skip_reason == "--no-backup"
+
+            nopw = update_steps(conn, db_path=dbf, password=None, today=today)
+            assert "TWCRAWL_BACKUP_PASSWORD" in nopw[-1].skip_reason
+            assert nopw[-1].run is None, "沒密碼就不該有可執行的備份步驟"
+        finally:
+            conn.close()  # Windows：先關連線才能清 TemporaryDirectory
+    print("✓ update 步驟組裝（區間與回溯日期入標籤、旗標對應跳過原因）")
+
+
+def test_latest_capture_prefers_newest_not_alphabetical():
+    """capture 目錄與 fetch 目錄混在一起時，要按時間取而不是按檔名。"""
+    import os as _os
+
+    from twcrawl.commands import latest_capture
+
+    with TemporaryDirectory() as d:
+        caps = Path(d) / "captures"
+        older_fetch = caps / "einvoice-fetch-20260101-000000"
+        newer_capture = caps / "einvoice-20260730-120000"
+        for p in (older_fetch, newer_capture):
+            p.mkdir(parents=True)
+        _os.utime(older_fetch, (1_000_000, 1_000_000))
+        _os.utime(newer_capture, (2_000_000, 2_000_000))
+
+        assert sorted(p.name for p in caps.iterdir())[-1] == older_fetch.name, \
+            "前提：字典序下 einvoice-f 確實會贏過 einvoice-2"
+        assert latest_capture(caps).name == newer_capture.name, \
+            "應按 mtime 取最新，不是字典序"
+    print("✓ 最新擷取目錄按 mtime 取（fetch 目錄不會恆勝人工 capture）")
+
+
+def test_cmd_handoff_writes_summary():
+    """handoff 指令的寫檔行為（原本鎖在 cli.main 裡，測不到）。"""
+    from twcrawl.commands import cmd_handoff
+
+    with TemporaryDirectory() as d:
+        root = Path(d) / "captures" / "einvoice-20260730-090000"
+        (root / "responses").mkdir(parents=True)
+        (root / "responses" / "001_query.json").write_text(json.dumps({
+            "details": [{"invNum": "XY98765432", "sellerName": "祕密商店"}],
+        }, ensure_ascii=False), encoding="utf-8")
+        (root / "index.json").write_text(json.dumps([{
+            "seq": 1, "kind": "response",
+            "url": "https://example.test/api/query?token=TOPSECRETTOKEN",
+            "method": "POST", "status": 200,
+            "content_type": "application/json", "bytes": 99,
+            "file": "responses/001_query.json",
+        }], ensure_ascii=False), encoding="utf-8")
+
+        out = Path(d) / "out"
+        res = cmd_handoff(capture_dir=root, out_dir=out)
+
+        written = Path(res["path"])
+        assert written.parent == out, "應寫進指定的 out_dir"
+        assert written.name == f"handoff_{root.name}.txt"
+        text = written.read_text(encoding="utf-8")
+        assert text == res["text"], "回傳的文字與寫出的檔案必須一致"
+        assert "invNum" in text, "欄位名要留著"
+        for secret in ("XY98765432", "祕密商店", "TOPSECRETTOKEN"):
+            assert secret not in text, f"摘要洩漏了值：{secret}"
+    print("✓ handoff 指令：摘要同步寫檔、內容去值化")
+
+
+def test_backup_password_sources():
+    """環境變數優先；非互動終端機回 None 而不是卡在提示上。"""
+    import os as _os
+
+    from twcrawl.commands import backup_password
+
+    saved_env = _os.environ.pop("TWCRAWL_BACKUP_PASSWORD", None)
+    saved_stdin = sys.stdin
+    try:
+        _os.environ["TWCRAWL_BACKUP_PASSWORD"] = "來自環境變數"
+        assert backup_password() == "來自環境變數"
+
+        del _os.environ["TWCRAWL_BACKUP_PASSWORD"]
+        sys.stdin = None  # 模擬非互動終端機；絕不能走到 getpass
+        assert backup_password() is None
+    finally:
+        sys.stdin = saved_stdin
+        _os.environ.pop("TWCRAWL_BACKUP_PASSWORD", None)
+        if saved_env is not None:
+            _os.environ["TWCRAWL_BACKUP_PASSWORD"] = saved_env
+    print("✓ 備份密碼來源（環境變數優先、非互動回 None）")
 
 
 def test_export_items_and_query_page():

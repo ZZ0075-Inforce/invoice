@@ -128,7 +128,10 @@ def wait_for_operator(message: str, pump: Page | None = None) -> None:
                 return
         elif done.is_set():
             if aborted.is_set():
-                raise SystemExit("已中止。")
+                # 拋 KeyboardInterrupt 而不是 SystemExit：update 的步驟 runner
+                # 會把 SystemExit 當成「這一步失敗」記錄後續跑下一步，但人工
+                # 按 Ctrl+C 中止時應該停掉整輪。兩者必須在型別上可分辨。
+                raise KeyboardInterrupt
             return
         if pump is not None:
             try:

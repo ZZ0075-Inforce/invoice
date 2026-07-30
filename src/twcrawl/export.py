@@ -20,14 +20,9 @@ from .categories import Classifier, UNCATEGORIZED, industry_category
 TEMPLATE = Path(__file__).parent / "web" / "dashboard.html"
 MATCH_REPORT = Path("out/match_report.csv")
 
-# 食安頁的來源標示：已知來源的顯示名與型態（事件＝有專屬清單的單一食安案、
-# 監測＝常設公告 feed）。未知來源（未來新事件）後備為「名稱原文＋事件」——
-# 在 sites/fda.py 的 SOURCES 加一條，食安頁自動長出分頁，這裡不改也能動。
-FDA_SOURCE_META: dict[str, tuple[str, str]] = {
-    "edible_oil": ("中聯油脂案", "事件"),
-    "csm_news": ("國內回收公告", "監測"),
-    "csm_light": ("國際警訊", "監測"),
-}
+# 食安頁的來源標示（顯示名與事件／監測型態）住在 sites/fda.py 的 SOURCE_META
+# ——抓取端要靠型態決定 since 適不適用，呈現端要靠它分頁，同一份知識兩邊都要。
+# 在 fda.py 的 SOURCES 加一條，食安頁自動長出分頁，這裡不改也能動。
 
 
 def _seller_info(conn, cl: Classifier) -> dict[str, dict]:
@@ -184,12 +179,13 @@ def build_payload(conn, classifier: Classifier | None = None,
 
     # 來源歸戶：match 報告的 source 欄是 source_url，反查 SOURCES 得名稱；
     # 直接寫名稱的（測試、未來格式）也照樣解析
-    from .sites.fda import SOURCES as _FDA_SOURCES  # 延後載入：fda 會拖 playwright
+    # 延後載入：fda 會拖 playwright
+    from .sites.fda import SOURCES as _FDA_SOURCES, source_meta as _fda_source_meta
     url2name = {url: name for name, url in _FDA_SOURCES.items()}
 
     def src_info(src: str) -> tuple[str, str, str]:
         key = url2name.get(src, src or "")
-        label, kind = FDA_SOURCE_META.get(key, (key or "未標來源", "事件"))
+        label, kind = _fda_source_meta(key)
         return key, label, kind
 
     sources: dict[str, dict] = {}
