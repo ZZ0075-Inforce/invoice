@@ -163,9 +163,9 @@ def _write_csv(out_dir: Path, table_key: str, rows: list[dict], name: str = "") 
 def fetch(
     page: Page,
     conn,
+    out_dir: Path,
     url: str = URL,
     max_pages: int = 500,
-    out_dir: Path = Path("out"),
     since: str | None = None,
     name: str = "",
 ) -> dict[str, int]:

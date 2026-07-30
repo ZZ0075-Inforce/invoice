@@ -63,7 +63,7 @@ _ITEM_LOOKUP = {a: canon for canon, al in ITEM_ALIASES.items() for a in al}
 
 # ---------------------------------------------------------------- 互動流程 --
 
-def login(ctx: BrowserContext) -> None:
+def login(ctx: BrowserContext, session_file: Path) -> None:
     page = ctx.new_page()
     page.goto(HOME, wait_until="domcontentloaded")
     wait_for_operator(
@@ -74,7 +74,7 @@ def login(ctx: BrowserContext) -> None:
         "\n本工具不會讀取也不會儲存你的密碼，只保存登入後的 cookie。",
         pump=page,
     )
-    p = save_session(ctx, SESSION)
+    p = save_session(ctx, session_file)
     print(f"已保存登入狀態 → {p}（權限 600，已列入 .gitignore）")
 
 
@@ -433,6 +433,17 @@ def _load_index(capture_dir: Path) -> dict[str, dict]:
     return {str(e.get("file", "")).replace("\\", "/"): e for e in entries}
 
 
+def _db_file(conn) -> str:
+    """連線實際指向的檔案。以前這裡印的是模組常數，換個資料庫就對不上。"""
+    try:
+        for _seq, name, file in conn.execute("PRAGMA database_list"):
+            if name == "main":
+                return file or ":memory:"
+    except Exception:
+        pass
+    return "?"
+
+
 def ingest(capture_dir: Path, conn) -> dict[str, int]:
     invoices: list[dict] = []
     items: list[dict] = []
@@ -469,7 +480,7 @@ def ingest(capture_dir: Path, conn) -> dict[str, int]:
                     cur[k] = v
     n_inv = db.upsert_invoices(conn, dedup_inv.values())
     n_item = db.upsert_items(conn, items)
-    print(f"\n匯入完成：發票 {n_inv} 筆、明細 {n_item} 列 → {db.DEFAULT_DB}")
+    print(f"\n匯入完成：發票 {n_inv} 筆、明細 {n_item} 列 → {_db_file(conn)}")
     if not n_inv:
         print(
             "沒有辨識出任何發票。請把 captures/ 底下的 index.json 內容提供出來，"

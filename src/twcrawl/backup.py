@@ -12,9 +12,7 @@ from pathlib import Path
 
 import pyzipper
 
-from . import db
-
-BACKUP_DIR = Path("out/backup")
+from .workspace import Workspace
 
 
 def _iter_files(paths: list[Path]):
@@ -25,24 +23,24 @@ def _iter_files(paths: list[Path]):
             yield from (f for f in sorted(p.rglob("*")) if f.is_file())
 
 
-def _arcname(f: Path) -> str:
-    try:
-        return f.resolve().relative_to(Path.cwd().resolve()).as_posix()
-    except ValueError:
-        drive, tail = str(f.resolve()).replace("\\", "/").split(":", 1) \
-            if ":" in str(f) else ("", f.as_posix())
-        return tail.lstrip("/")
+def _arcname(f: Path, root: Path) -> str:
+    """壓縮包內的路徑一律相對工作區 root。
+
+    以前是相對 `Path.cwd()`，所以同一份資料在不同目錄下備份會得到不同的包
+    版面（還得為 Windows 磁碟機字母另開一條退路）。收進包的檔案一律在 root
+    底下，相對化不會失敗。
+    """
+    return f.resolve().relative_to(root.resolve()).as_posix()
 
 
 def make_backup(
     password: str,
-    db_path: Path | str = db.DEFAULT_DB,
-    captures_dir: Path | str = Path("captures"),
-    out_dir: Path | str = BACKUP_DIR,
+    ws: Workspace,
+    out_dir: Path | str | None = None,
 ) -> Path:
     if not password:
         raise ValueError("備份密碼不可為空")
-    targets = [Path(db_path), Path(captures_dir)]
+    targets = [ws.db, ws.captures]
     files = list(_iter_files(targets))
     if not files:
         raise SystemExit("沒有可備份的資料（資料庫與 captures/ 都不存在）。")
@@ -50,7 +48,7 @@ def make_backup(
         if "state" in f.parts:
             raise AssertionError(f"備份絕不收 state/：{f}")
 
-    out_dir = Path(out_dir)
+    out_dir = Path(out_dir) if out_dir else ws.backup
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M")
     out_path = out_dir / f"twcrawl-backup-{stamp}.zip"
@@ -62,7 +60,7 @@ def make_backup(
     ) as zf:
         zf.setpassword(password.encode("utf-8"))
         for f in files:
-            zf.write(f, arcname=_arcname(f))
+            zf.write(f, arcname=_arcname(f, ws.root))
 
     size_mb = out_path.stat().st_size / 1_048_576
     print(f"備份包：{out_path}（{len(files)} 檔，{size_mb:.1f} MB，AES-256）")

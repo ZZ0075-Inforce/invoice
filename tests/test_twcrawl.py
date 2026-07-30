@@ -136,7 +136,7 @@ def _serve(style: str = "postback") -> tuple[HTTPServer, str]:
 def test_table_extraction_and_pagination():
     srv, url = _serve()
     try:
-        with browser_context(session=None, headed=False) as ctx:
+        with browser_context(session_file=None, headed=False) as ctx:
             page = ctx.new_page()
             page.goto(url)
 
@@ -168,7 +168,7 @@ def test_pagination_terminates_on_repeat():
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{srv.server_port}/"
     try:
-        with browser_context(session=None, headed=False) as ctx:
+        with browser_context(session_file=None, headed=False) as ctx:
             page = ctx.new_page()
             page.goto(url)
             collected = crawl_paginated(page, max_pages=50, settle_ms=100)
@@ -188,17 +188,17 @@ def test_fda_fetch_end_to_end():
             # Windows 不允許刪除仍被開啟的檔案：連線必須在暫存目錄清理前關閉
             conn = db.connect(Path(d) / "fda.sqlite")
             try:
-                with browser_context(session=None, headed=False) as ctx:
-                    res = fda.fetch(ctx.new_page(), conn, url=url, max_pages=10,
-                                    out_dir=Path(d) / "out")
+                with browser_context(session_file=None, headed=False) as ctx:
+                    res = fda.fetch(ctx.new_page(), conn, Path(d) / "out",
+                                    url=url, max_pages=10)
                 assert res["rows"] == PAGES * PER_PAGE, res
                 n = conn.execute("SELECT COUNT(*) FROM fda_rows").fetchone()[0]
                 assert n == PAGES * PER_PAGE, n
 
                 # 重跑一次不應新增列（僅更新 last_seen）
-                with browser_context(session=None, headed=False) as ctx:
-                    fda.fetch(ctx.new_page(), conn, url=url, max_pages=10,
-                              out_dir=Path(d) / "out")
+                with browser_context(session_file=None, headed=False) as ctx:
+                    fda.fetch(ctx.new_page(), conn, Path(d) / "out",
+                              url=url, max_pages=10)
                 n2 = conn.execute("SELECT COUNT(*) FROM fda_rows").fetchone()[0]
                 assert n2 == n, f"重跑後應維持 {n} 列，實得 {n2}"
 
@@ -226,9 +226,9 @@ def test_fda_idx_pagination():
         with TemporaryDirectory() as d:
             conn = db.connect(Path(d) / "idx.sqlite")
             try:
-                with browser_context(session=None, headed=False) as ctx:
-                    res = fda.fetch(ctx.new_page(), conn, url=url, max_pages=10,
-                                    out_dir=Path(d) / "out")
+                with browser_context(session_file=None, headed=False) as ctx:
+                    res = fda.fetch(ctx.new_page(), conn, Path(d) / "out",
+                                    url=url, max_pages=10)
                 assert res["rows"] == PAGES * PER_PAGE, (
                     f"應收 {PAGES * PER_PAGE} 列（含「下一頁」消失後的頁），實得 {res['rows']}"
                 )
@@ -391,33 +391,29 @@ def test_parse_csv_md_format():
 
 def test_netcapture_records_plaintext_xhr():
     """XHR 回應即使 content-type 是 text/plain 也要錄到；索引須隨錄隨寫。"""
-    import os
-
     from twcrawl.netcapture import Capture
+    from twcrawl.workspace import Workspace
 
     srv, url = _serve()
-    cwd = os.getcwd()
     try:
         with TemporaryDirectory() as d:
-            os.chdir(d)  # Capture 寫到相對路徑 captures/
-            try:
-                cap = Capture("test")
-                with browser_context(session=None, headed=False) as ctx:
-                    cap.attach(ctx)
-                    page = ctx.new_page()
-                    page.goto(url + "xhr")
-                    page.wait_for_timeout(1500)
-                # 未呼叫 finish() 前索引就該存在（隨錄隨寫）
-                assert (cap.root / "index.json").exists(), "索引應隨錄隨寫"
-                root = cap.finish()
-                idx = json.loads((root / "index.json").read_text(encoding="utf-8"))
-                hit = [e for e in idx if "/api" in e["url"]]
-                assert hit, f"應錄到 /api 的 XHR 回應，實得 {[e['url'] for e in idx]}"
-                saved = root / hit[0]["file"]
-                assert saved.suffix == ".json", "內容是 JSON 應以 .json 存檔"
-                print("✓ netcapture：text/plain 的 XHR 也被錄下、索引隨錄隨寫")
-            finally:
-                os.chdir(cwd)  # 必須先離開暫存目錄，Windows 才能清理
+            ws = Workspace(Path(d))   # 以前得 os.chdir，因為 Capture 寫死相對路徑
+            cap = Capture(ws.new_capture("test"))
+            assert ws.captures in cap.root.parents, "擷取目錄必須落在工作區內"
+            with browser_context(session_file=None, headed=False) as ctx:
+                cap.attach(ctx)
+                page = ctx.new_page()
+                page.goto(url + "xhr")
+                page.wait_for_timeout(1500)
+            # 未呼叫 finish() 前索引就該存在（隨錄隨寫）
+            assert (cap.root / "index.json").exists(), "索引應隨錄隨寫"
+            root = cap.finish()
+            idx = json.loads((root / "index.json").read_text(encoding="utf-8"))
+            hit = [e for e in idx if "/api" in e["url"]]
+            assert hit, f"應錄到 /api 的 XHR 回應，實得 {[e['url'] for e in idx]}"
+            saved = root / hit[0]["file"]
+            assert saved.suffix == ".json", "內容是 JSON 應以 .json 存檔"
+            print("✓ netcapture：text/plain 的 XHR 也被錄下、索引隨錄隨寫")
     finally:
         srv.shutdown()
 
@@ -429,17 +425,17 @@ def test_wait_for_operator_pumps_events():
 
     from twcrawl.browser import wait_for_operator
     from twcrawl.netcapture import Capture
+    from twcrawl.workspace import Workspace
 
     srv, url = _serve()
-    cwd = os.getcwd()
     try:
         with TemporaryDirectory() as d:
-            os.chdir(d)
+            ws = Workspace(Path(d))
             try:
                 flag = Path(d) / "done.flag"
                 os.environ["TWCRAWL_DONE_FILE"] = str(flag)
-                cap = Capture("pump")
-                with browser_context(session=None, headed=False) as ctx:
+                cap = Capture(ws.new_capture("pump"))
+                with browser_context(session_file=None, headed=False) as ctx:
                     cap.attach(ctx)
                     page = ctx.new_page()
                     page.goto(url + "xhr-delayed")  # XHR 在載入完 1.5 秒後才發出
@@ -453,7 +449,6 @@ def test_wait_for_operator_pumps_events():
                 print("✓ wait_for_operator：等待期間的 XHR 有被錄到（事件持續派發）")
             finally:
                 os.environ.pop("TWCRAWL_DONE_FILE", None)
-                os.chdir(cwd)
     finally:
         srv.shutdown()
 
@@ -547,6 +542,7 @@ def test_match_invoices_against_fda():
     餐飲現調濾除（菜名撞包裝品名）。"""
     from twcrawl.categories import Classifier
     from twcrawl.match import run_match
+    from twcrawl.workspace import Workspace
 
     with TemporaryDirectory() as d:
         conn = db.connect(Path(d) / "m.sqlite")
@@ -594,8 +590,9 @@ def test_match_invoices_against_fda():
                  "data": json.dumps({"業者": "台灣卜蜂企業", "產品": "蝦仁蛋炒飯280g"},
                                     ensure_ascii=False)},
             ])
-            res = run_match(conn, since="2026-03-01", out_dir=Path(d) / "out",
-                            classifier=Classifier(local_path=Path(d) / "no.json"))
+            ws = Workspace(Path(d))
+            res = run_match(conn, ws.match_report, Classifier(ws.rules),
+                            since="2026-03-01")
             # 店家層級：AA 品項有交集保留、EE 無明細保留；BB 在 since 前、
             # DD 品項皆不在該業者下架清單 → 排除
             assert res["seller_hits"] == 2, res
@@ -603,7 +600,7 @@ def test_match_invoices_against_fda():
             assert res["prod_hits"] == 1, res     # 沙拉油命中、230 純數字排除
             assert res["news_hits"] == 1, res     # 苦茶油命中警訊標題
             assert res["eatery_skips"] == 1, res  # 小吃店炒飯×即食包＝濾除
-            report = Path(d) / "out" / "match_report.csv"
+            report = ws.match_report
             assert report.exists(), "應輸出報告 CSV"
             import csv as _csv
             with report.open(encoding="utf-8-sig") as f:
@@ -670,10 +667,12 @@ def test_categories_two_tier_precedence():
 def test_export_builds_dashboard():
     from twcrawl import export
     from twcrawl.categories import Classifier
+    from twcrawl.workspace import Workspace
 
     with TemporaryDirectory() as td:
         td = Path(td)
-        conn = db.connect(td / "t.sqlite")
+        ws = Workspace(td)
+        conn = db.connect(ws.db)
         try:
             db.upsert_invoices(conn, [
                 {"inv_num": "AA1", "inv_date": "2026-05-03",
@@ -685,8 +684,8 @@ def test_export_builds_dashboard():
                 {"inv_num": "AA4", "inv_date": "2026-06-01",
                  "seller_name": "全聯實業股份有限公司", "amount": 300.0},
             ])
-            cl = Classifier(local_path=td / "沒有這個檔.json")
-            payload = export.build_payload(conn, cl)
+            cl = Classifier(ws.rules)
+            payload = export.build_payload(conn, ws, cl)
             assert [m["month"] for m in payload["months"]] == ["2026-05", "2026-06"]
             assert payload["months"][0]["total"] == 360.0
             assert payload["categories"][0]["name"] == "超市", "分類應依金額排序"
@@ -694,9 +693,9 @@ def test_export_builds_dashboard():
             assert payload["unnecessary"][0]["amount"] == 60.0
             assert any(s["name"] == "神秘小舖" for s in payload["uncategorized"])
 
-            dash = export.write_export(conn, out_dir=td / "out", classifier=cl)
+            dash = export.write_export(conn, ws, cl)
             assert dash.exists()
-            data_js = (td / "out" / "data.js").read_text(encoding="utf-8")
+            data_js = (ws.out / "data.js").read_text(encoding="utf-8")
             assert data_js.startswith("window.TWCRAWL_DATA = ")
         finally:
             conn.close()
@@ -706,10 +705,12 @@ def test_export_builds_dashboard():
 def test_item_override_invoice_level():
     from twcrawl import export
     from twcrawl.categories import Classifier
+    from twcrawl.workspace import Workspace
 
     with TemporaryDirectory() as td:
         td = Path(td)
-        cl = Classifier(local_path=td / "沒有這個檔.json")
+        ws = Workspace(td)
+        cl = Classifier(td / "沒有這個檔.json")
         assert cl.item_category(["95無鉛汽油"]) == "加油"
         assert cl.item_category(["九二無鉛汽油", "礦泉水"]) == "加油"
         assert cl.item_category(["鮮奶", None, ""]) is None
@@ -717,10 +718,10 @@ def test_item_override_invoice_level():
         local = td / "categories.local.json"
         local.write_text(json.dumps({"item_rules": {"無鉛汽油": "個人品項"}},
                                     ensure_ascii=False), encoding="utf-8")
-        assert Classifier(local_path=local).item_category(
+        assert Classifier(local).item_category(
             ["95無鉛汽油"]) == "個人品項", "品項規則個人層應優先"
 
-        conn = db.connect(td / "t.sqlite")
+        conn = db.connect(ws.db)
         try:
             db.upsert_invoices(conn, [
                 {"inv_num": "CS1", "inv_date": "2026-02-18",
@@ -736,7 +737,7 @@ def test_item_override_invoice_level():
                 {"inv_num": "CS2", "row_no": 1, "description": "鮮奶",
                  "amount": 500.0, "raw": "[]"},
             ])
-            payload = export.build_payload(conn, cl)
+            payload = export.build_payload(conn, ws, cl)
             by_num = {v["num"]: v for v in payload["invoices"]}
             assert by_num["CS1"]["category"] == "加油", "油品發票應覆寫成加油"
             assert by_num["CS2"]["category"] == "量販", "其他發票不受影響"
@@ -754,23 +755,25 @@ def test_item_override_invoice_level():
 def test_backup_roundtrip_and_excludes_state():
     import pyzipper
     from twcrawl import backup as bk
+    from twcrawl.workspace import Workspace
 
     with TemporaryDirectory() as td:
         td = Path(td)
-        (td / "out").mkdir()
-        (td / "captures" / "a").mkdir(parents=True)
-        dbf = td / "out" / "t.sqlite"
-        dbf.write_bytes(b"sqlite-bytes")
-        (td / "captures" / "a" / "r.json").write_text("{}", encoding="utf-8")
+        ws = Workspace(td)
+        ws.ensure_out()
+        (ws.captures / "a").mkdir(parents=True)
+        ws.db.write_bytes(b"sqlite-bytes")
+        (ws.captures / "a" / "r.json").write_text("{}", encoding="utf-8")
 
-        out = bk.make_backup("pw123", db_path=dbf,
-                             captures_dir=td / "captures", out_dir=td / "bak")
+        out = bk.make_backup("pw123", ws, out_dir=td / "bak")
         with pyzipper.AESZipFile(out) as zf:
             zf.setpassword(b"pw123")
             names = zf.namelist()
-            assert any(n.endswith("t.sqlite") for n in names)
+            assert any(n.endswith("twcrawl.sqlite") for n in names)
             got = zf.read(next(n for n in names if n.endswith("r.json")))
             assert got == b"{}", "解密內容應與原檔一致"
+            # 包內路徑相對工作區 root，不隨執行目錄變動
+            assert "captures/a/r.json" in names, names
 
         wrong_ok = False
         try:
@@ -781,7 +784,27 @@ def test_backup_roundtrip_and_excludes_state():
         except Exception:
             pass
         assert not wrong_ok, "錯誤密碼不應能解密"
-    print("✓ backup 加密備份可往返、錯誤密碼被拒")
+
+        # ADR-0001 紅線：state/ 是登入 cookie，永遠不進備份包。
+        # 以前這個測試從沒建立過 state/，所以底下兩道防線都沒被驗證過。
+        # 防線一：state/ 本來就不在收集範圍。
+        ws.ensure_state()
+        (ws.state / "einvoice.json").write_text("{}", encoding="utf-8")
+        out2 = bk.make_backup("pw123", ws, out_dir=td / "bak2")
+        with pyzipper.AESZipFile(out2) as zf:
+            assert all("state" not in n.split("/") for n in zf.namelist()), \
+                f"備份包不得含 state/：{zf.namelist()}"
+
+        # 防線二：萬一 state 檔混進了收集範圍，backup.py 的 assert 要當場擋下。
+        (ws.captures / "state").mkdir()
+        (ws.captures / "state" / "leak.json").write_text("{}", encoding="utf-8")
+        blocked = False
+        try:
+            bk.make_backup("pw123", ws, out_dir=td / "bak3")
+        except AssertionError as e:
+            blocked = "備份絕不收 state/" in str(e)
+        assert blocked, "state 檔混入收集範圍時必須當場失敗"
+    print("✓ backup 加密可往返、錯誤密碼被拒、state/ 兩道防線都成立")
 
 
 def test_bizreg_filters_needed_bans():
@@ -827,6 +850,7 @@ def test_bizreg_filters_needed_bans():
 def test_export_industry_fallback_and_alias():
     from twcrawl import export
     from twcrawl.categories import Classifier
+    from twcrawl.workspace import Workspace
 
     with TemporaryDirectory() as td:
         td = Path(td)
@@ -845,7 +869,7 @@ def test_export_industry_fallback_and_alias():
                 "insert into biz_registry (ban, name, address, industry) "
                 "values ('12345678','神秘小舖','台中市測試路1號','餐盒零售')")
             conn.commit()
-            payload = export.build_payload(conn, Classifier(local_path=local))
+            payload = export.build_payload(conn, Workspace(td), Classifier(local))
             s = payload["sellers"][0]
             assert s["category"] == "餐飲", "rules 沒中時應以稅籍行業後備分類"
             assert s["name"] == "MYSTERY LAB" and s["legal"] == "神秘小舖"
@@ -882,10 +906,12 @@ def test_update_auto_month_range():
 def test_export_items_and_query_page():
     from twcrawl import export
     from twcrawl.categories import Classifier
+    from twcrawl.workspace import Workspace
 
     with TemporaryDirectory() as td:
         td = Path(td)
-        conn = db.connect(td / "t.sqlite")
+        ws = Workspace(td)
+        conn = db.connect(ws.db)
         try:
             db.upsert_invoices(conn, [
                 {"inv_num": "DD1", "inv_date": "2026-05-03",
@@ -896,8 +922,8 @@ def test_export_items_and_query_page():
                 {"inv_num": "DD1", "row_no": 1, "description": "珍珠鮮奶茶",
                  "quantity": 1, "unit_price": 60.0, "amount": 60.0},
             ])
-            cl = Classifier(local_path=td / "沒有這個檔.json")
-            payload = export.build_payload(conn, cl)
+            cl = Classifier(ws.rules)
+            payload = export.build_payload(conn, ws, cl)
             row = payload["invoices"][0]
             assert row["num"] == "DD1", "發票列應帶發票號碼（查詢頁對帳用）"
             assert row["items"][0]["desc"] == "珍珠鮮奶茶"
@@ -905,9 +931,9 @@ def test_export_items_and_query_page():
             assert "SECRET99" not in json.dumps(payload, ensure_ascii=False), \
                 "載具號碼永不進 data.js（ADR-0002）"
 
-            export.write_export(conn, out_dir=td / "out", classifier=cl)
-            assert (td / "out" / "query.html").exists(), "export 應就位查詢頁"
-            assert (td / "out" / "fda.html").exists(), "export 應就位食安頁"
+            export.write_export(conn, ws, cl)
+            assert (ws.out / "query.html").exists(), "export 應就位查詢頁"
+            assert (ws.out / "fda.html").exists(), "export 應就位食安頁"
         finally:
             conn.close()
     print("✓ export：品項與發票號碼進 data.js、查詢頁就位、載具號碼排除")
@@ -920,28 +946,27 @@ def test_serve_rules_writeback():
     from twcrawl import export
     from twcrawl import serve as serve_mod
     from twcrawl.categories import Classifier
+    from twcrawl.workspace import Workspace
 
     with TemporaryDirectory() as td:
         td = Path(td)
-        dbf = td / "t.sqlite"
-        conn = db.connect(dbf)
+        ws = Workspace(td)
+        local, out = ws.rules, ws.out
+        conn = db.connect(ws.db)
         try:
             db.upsert_invoices(conn, [
                 {"inv_num": "EE1", "inv_date": "2026-05-01",
                  "seller_name": "神祕測試店", "amount": 100.0},
             ])
-            local = td / "categories.local.json"
             local.write_text(json.dumps(
                 {"aliases": {"神祕": "MYSTERY"},
                  "item_rules": {"無鉛汽油": "加油"}},
                 ensure_ascii=False), encoding="utf-8")
-            out = td / "out"
-            export.write_export(conn, out_dir=out,
-                                classifier=Classifier(local_path=local))
+            export.write_export(conn, ws, Classifier(local))
         finally:
             conn.close()
 
-        httpd = serve_mod.make_server(dbf, out_dir=out, port=0, local_path=local)
+        httpd = serve_mod.make_server(ws, port=0)
         t = threading.Thread(target=httpd.serve_forever, daemon=True)
         t.start()
         try:
@@ -1023,23 +1048,23 @@ def test_local_rules_validation():
 def test_export_match_details():
     from twcrawl import export
     from twcrawl.categories import Classifier
+    from twcrawl.workspace import Workspace
 
     with TemporaryDirectory() as td:
         td = Path(td)
-        out = td / "out"
-        out.mkdir()
-        (out / "match_report.csv").write_text(
+        ws = Workspace(td)
+        ws.ensure_out()
+        ws.match_report.write_text(
             "﻿level,inv_num,inv_date,invoice_side,fda_side,source\n"
             "店家,AA1,2026-05-01,富利餐飲,富利餐飲股份有限公司,edible_oil\n",
             encoding="utf-8")
-        conn = db.connect(td / "t.sqlite")
+        conn = db.connect(ws.db)
         try:
             db.upsert_invoices(conn, [
                 {"inv_num": "AA1", "inv_date": "2026-05-01",
                  "seller_name": "富利餐飲", "amount": 100.0}])
-            cl = Classifier(local_path=td / "沒有.json")
-            payload = export.build_payload(
-                conn, cl, match_report=out / "match_report.csv")
+            cl = Classifier(ws.rules)
+            payload = export.build_payload(conn, ws, cl)
             assert payload["fda"]["match"] == {"店家": 1}
             m = payload["fda"]["matches"][0]
             assert m["level"] == "店家" and m["fda"].startswith("富利"), m
@@ -1050,12 +1075,14 @@ def test_export_match_details():
             assert src["label"] == "中聯油脂案" and src["kind"] == "事件"
             assert src["hits"] == 1, "來源要帶命中數（食安頁總覽用）"
 
-            none = export.build_payload(conn, cl,
-                                        match_report=td / "沒有這份報告.csv")
+            # 沒有報告的工作區：不該撿到別處的檔案
+            empty = Workspace(td / "另一個工作區")
+            empty.ensure_out()
+            none = export.build_payload(conn, empty, cl)
             assert none["fda"]["matches"] is None, "沒報告時不該撿到別處的檔案"
         finally:
             conn.close()
-    print("✓ export：match 命中明細進 payload（月報 FDA 卡）、報告路徑跟著 out_dir")
+    print("✓ export：match 命中明細進 payload（月報 FDA 卡）、報告路徑由工作區決定")
 
 
 def test_fixed_spend_detection():
@@ -1181,7 +1208,7 @@ def test_lottery_check_invoices():
                 {"inv_num": "GH11223344", "inv_date": "2026-07-01",
                  "seller_name": "期別外", "amount": 999},
             ])
-            r = lottery.check_invoices(conn)
+            r = lottery.check_invoices(conn, Path(td) / "cache")
             p = r["periods"][0]
             assert p["n_invoices"] == 3, "7 月發票不屬 05-06 月期"
             prizes = {w["inv_num"]: w["prize"] for w in p["wins"]}
@@ -1235,15 +1262,132 @@ def test_lottery_cloud_check():
     print("✓ 對獎：雲端專屬獎（gz 快取、完整字軌比對、傳統/雲端擇高）")
 
 
+def test_workspace_layout():
+    """工作區：路徑全部相對 root、擷取目錄依 mtime 選最新、缺資料庫講人話。"""
+    import os
+    import time as _time
+
+    from twcrawl.workspace import Workspace
+
+    with TemporaryDirectory() as td:
+        td = Path(td)
+        ws = Workspace(td)
+        for p in (ws.db, ws.out, ws.captures, ws.state, ws.cache, ws.rules,
+                  ws.backup, ws.match_report, ws.bizreg_cache, ws.probe_out,
+                  ws.state_path("einvoice"), ws.handoff_path("x")):
+            assert td in p.parents or p == td, f"{p} 應在工作區內"
+
+        # 缺資料庫：讀取型指令的前置條件要講人話
+        missing = ""
+        try:
+            ws.require_db()
+        except SystemExit as e:
+            missing = str(e)
+        assert "不是 twcrawl 工作區" in missing, missing
+
+        # 沒有擷取結果也要講人話
+        none = ""
+        try:
+            ws.latest_capture()
+        except SystemExit as e:
+            none = str(e)
+        assert "找不到任何擷取結果" in none, none
+
+        # new_capture：目錄形狀只有一份定義
+        a = ws.new_capture("einvoice")
+        assert (a / "responses").is_dir() and (a / "downloads").is_dir()
+
+        # latest_capture 依 mtime——字典序會讓 einvoice-f… 恆勝 einvoice-2…
+        _time.sleep(0.01)
+        b = ws.new_capture("einvoice-fetch")
+        os.utime(a, (_time.time() + 10, _time.time() + 10))  # a 明確較新
+        assert ws.latest_capture() == a, \
+            f"應依 mtime 選最新，實得 {ws.latest_capture().name}（另有 {b.name}）"
+    print("✓ workspace：路徑全在 root 內、擷取目錄依 mtime、缺資料庫有人話")
+
+
+def test_cli_wires_paths_through_workspace():
+    """CLI 端到端：產物全落在工作區，跨指令的路徑彼此對得上。
+
+    cli.py 以前覆蓋率 ~4%，而路徑接線最集中的就是它。這裡走 main([...])；
+    cwd 就是工作區，那是 CLI 唯一的路徑輸入。
+    """
+    import os
+
+    from twcrawl import cli
+    from twcrawl.workspace import Workspace
+
+    cwd = os.getcwd()
+    with TemporaryDirectory() as d:
+        ws = Workspace(Path(d))
+        os.chdir(d)
+        try:
+            # 空目錄跑讀取型指令：要擋下並講人話，而不是默默生一個空資料庫
+            refused = ""
+            try:
+                cli.main(["export", "--no-open"])
+            except SystemExit as e:
+                refused = str(e)
+            assert "不是 twcrawl 工作區" in refused, refused
+            assert not ws.out.exists(), "被擋下時不該留下任何目錄"
+
+            conn = db.connect(ws.db)
+            try:
+                db.upsert_invoices(conn, [
+                    {"inv_num": "ZZ11111111", "inv_date": "2026-05-01",
+                     "seller_name": "測試商行一店", "amount": 100.0},
+                ])
+                db.upsert_items(conn, [
+                    {"inv_num": "ZZ11111111", "row_no": 1,
+                     "description": "特級沙拉油", "amount": 100.0, "raw": "[]"},
+                ])
+                db.upsert_fda_rows(conn, [
+                    {"row_hash": "z1", "source_url": "u1", "table_key": "t",
+                     "page_no": 1,
+                     "data": json.dumps({"業者": "測試商行",
+                                         "產品/品項": "特級沙拉油18L"},
+                                        ensure_ascii=False)},
+                ])
+            finally:
+                conn.close()
+
+            assert cli.main(["match"]) == 0
+            assert ws.match_report.exists(), "match 的報告應落在工作區的 out/"
+
+            assert cli.main(["export", "--no-open"]) == 0
+            for name in ("data.js", "dashboard.html", "query.html",
+                         "fda.html", "map.html"):
+                assert (ws.out / name).exists(), f"{name} 應就位"
+            data_js = (ws.out / "data.js").read_text(encoding="utf-8")
+            assert '"matches"' in data_js and "特級沙拉油" in data_js, \
+                "export 要讀得到 match 的報告——兩者的路徑必須同源推導"
+
+            # --db 已移除：路徑一律由工作區決定
+            gone = False
+            try:
+                cli.main(["--db", "x.sqlite", "export", "--no-open"])
+            except SystemExit:
+                gone = True
+            assert gone, "--db 應已移除"
+        finally:
+            os.chdir(cwd)   # 必須先離開暫存目錄，Windows 才能清理
+    print("✓ CLI：產物全落在工作區、match→export 路徑同源、--db 已移除")
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
     for t in tests:
         try:
             t()
-        except Exception as e:
+        # SystemExit 是這個 codebase 的正常錯誤通道（categories/backup/fda/
+        # bizreg/handoff/browser 都用它）。只抓 Exception 的話，一個逃出的
+        # SystemExit 會靜默中止整輪、總數行永遠不印——看起來像「全過」。
+        except BaseException as e:
             failed += 1
             print(f"✗ {t.__name__}: {type(e).__name__}: {e}")
+            if isinstance(e, KeyboardInterrupt):
+                raise
     print(f"\n{len(tests) - failed}/{len(tests)} 通過")
     return 1 if failed else 0
 

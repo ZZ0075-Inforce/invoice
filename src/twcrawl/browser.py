@@ -10,13 +10,6 @@ from pathlib import Path
 
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
-STATE_DIR = Path("state")
-
-
-def state_path(name: str) -> Path:
-    return STATE_DIR / f"{name}.json"
-
-
 def _chromium_executable() -> str | None:
     """允許指定既有的 Chromium，避免 playwright 版本與瀏覽器版本不符。
 
@@ -31,17 +24,18 @@ def _chromium_executable() -> str | None:
 
 @contextlib.contextmanager
 def browser_context(
-    session: str | None = None,
+    session_file: Path | str | None = None,
     headed: bool = True,
     slow_mo: int = 0,
 ):
     """開一個 browser context，若 session 檔存在就載入既有登入狀態。
 
-    session 為 None 時代表不需要登入狀態（例如公開頁面）。
+    session_file 為 None 時代表不需要登入狀態（例如公開頁面）。路徑由呼叫端
+    從工作區推出（`ws.state_path(名稱)`）——這個模組不知道工作區在哪。
     """
     storage = None
-    if session:
-        p = state_path(session)
+    if session_file:
+        p = Path(session_file)
         if p.exists():
             storage = str(p)
 
@@ -79,9 +73,9 @@ def browser_context(
                 browser.close()
 
 
-def save_session(ctx: BrowserContext, session: str) -> Path:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    p = state_path(session)
+def save_session(ctx: BrowserContext, session_file: Path | str) -> Path:
+    p = Path(session_file)
+    p.parent.mkdir(parents=True, exist_ok=True)
     ctx.storage_state(path=str(p))
     p.chmod(0o600)  # 內含登入 cookie，限制權限
     return p

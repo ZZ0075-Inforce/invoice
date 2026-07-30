@@ -16,9 +16,9 @@ from collections import defaultdict
 from pathlib import Path
 
 from .categories import Classifier, UNCATEGORIZED, industry_category
+from .workspace import Workspace
 
 TEMPLATE = Path(__file__).parent / "web" / "dashboard.html"
-MATCH_REPORT = Path("out/match_report.csv")
 
 # 食安頁的來源標示：已知來源的顯示名與型態（事件＝有專屬清單的單一食安案、
 # 監測＝常設公告 feed）。未知來源（未來新事件）後備為「名稱原文＋事件」——
@@ -124,9 +124,9 @@ def _detect_fixed(inv_rows: list[dict]) -> list[dict]:
     return sorted(found, key=lambda x: (not x["active"], -x["monthly"]))
 
 
-def build_payload(conn, classifier: Classifier | None = None,
-                  match_report: Path | str | None = None) -> dict:
-    cl = classifier or Classifier()
+def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
+    """衍生儀表板資料。需要工作區的兩條路徑：比對報告與雲端獎清冊快取。"""
+    cl = classifier
     info = _seller_info(conn, cl)
     top_items = _top_items(conn)
     invs = conn.execute(
@@ -206,7 +206,7 @@ def build_payload(conn, classifier: Classifier | None = None,
         s["rows"] += cnt
         s["lastSeen"] = max(s["lastSeen"] or "", str(last or "")[:10]) or None
 
-    report = Path(match_report) if match_report else MATCH_REPORT
+    report = ws.match_report
     match_counts: dict[str, int] | None = None
     match_rows: list[dict] | None = None
     if report.exists():
@@ -228,7 +228,7 @@ def build_payload(conn, classifier: Classifier | None = None,
     # 對獎：號碼已在 lottery_draws（lottery 指令維護），這裡即算即得。
     # data.js 只放中獎結果與期別摘要，不放中獎號碼本身（UI 用不到）。
     from . import lottery as lottery_mod
-    lot_raw = lottery_mod.check_invoices(conn)
+    lot_raw = lottery_mod.check_invoices(conn, ws.cache)
     lottery = {
         "uncovered": lot_raw["uncovered"],
         "periods": [
@@ -278,13 +278,10 @@ def build_payload(conn, classifier: Classifier | None = None,
     }
 
 
-def write_export(conn, out_dir: Path | str = Path("out"),
-                 classifier: Classifier | None = None,
+def write_export(conn, ws: Workspace, classifier: Classifier,
                  template: Path = TEMPLATE) -> Path:
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    payload = build_payload(conn, classifier,
-                            match_report=out_dir / "match_report.csv")
+    out_dir = ws.ensure_out()
+    payload = build_payload(conn, ws, classifier)
     data_js = out_dir / "data.js"
     data_js.write_text(
         "window.TWCRAWL_DATA = "

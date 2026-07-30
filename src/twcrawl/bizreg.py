@@ -15,7 +15,6 @@ import zipfile
 from pathlib import Path
 
 URL = "https://eip.fia.gov.tw/data/BGMOPEN1.zip"
-CACHE = Path("out/bgmopen1.zip")
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36")
 
@@ -64,7 +63,7 @@ def _locate(header: list[str]) -> dict:
     return idx
 
 
-def refresh(conn, url: str = URL, cache: Path | str = CACHE, force: bool = False) -> int:
+def refresh(conn, cache: Path | str, url: str = URL, force: bool = False) -> int:
     bans = {str(r[0]).strip() for r in conn.execute(
         "select distinct seller_ban from invoices where seller_ban is not null")}
     if not bans:

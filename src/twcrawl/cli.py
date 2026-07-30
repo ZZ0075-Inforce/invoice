@@ -3,26 +3,49 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
 import getpass
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
 from . import backup as backup_mod
 from . import bizreg, db, export, geocode, handoff, lottery
 from .browser import browser_context
+from .categories import Classifier
 from .match import run_match
 from .netcapture import Capture
 from .probe import probe as run_probe
 from .sites import einvoice, einvoice_fetch, fda
+from .workspace import Workspace
 
 
-def _latest_capture() -> Path:
-    roots = sorted(Path("captures").glob("einvoice-*"), reverse=True)
-    if not roots:
-        raise SystemExit("找不到任何擷取結果，請先執行 `einvoice capture`。")
-    return roots[0]
+@contextlib.contextmanager
+def _open_db(ws: Workspace):
+    """指令期間持有連線，結束就關。
+
+    以前這裡開了 10 條連線、一條都沒關，靠直譯器結束時回收；在 Windows 上
+    那會一路鎖住資料庫檔（暫存工作區連刪都刪不掉）。
+    """
+    conn: sqlite3.Connection = db.connect(ws.db)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _classifier(ws: Workspace) -> Classifier:
+    """建分類器；沒有個人規則檔就講一句。
+
+    以前規則檔不存在是完全靜默的——在錯的目錄跑 export，個人規則全部消失
+    而畫面上看不出來。函式庫維持不印字，提示由這裡發出。
+    """
+    if not ws.rules.exists():
+        print(f"！沒有個人規則（{ws.rules} 不存在）"
+              "——店家將只靠通用規則與稅籍行業分類")
+    return Classifier(ws.rules)
 
 
 def _auto_month_range(last_inv_date: str | None, today: _dt.date) -> tuple[str, str]:
@@ -57,7 +80,6 @@ def _open_dashboard(path: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="twcrawl", description=__doc__)
-    ap.add_argument("--db", default=str(db.DEFAULT_DB), help="SQLite 檔案路徑")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p_login = sub.add_parser("login", help="開啟瀏覽器，由人工完成電子發票平台登入並保存 session")
@@ -134,7 +156,9 @@ def main(argv: list[str] | None = None) -> int:
     p_bak = sub.add_parser(
         "backup", help="產生 AES-256 加密備份包（僅密文可上雲，見 docs/adr/0001）"
     )
-    p_bak.add_argument("--out", default=str(backup_mod.BACKUP_DIR), help="備份包輸出目錄")
+    p_bak.add_argument("--out", default=None,
+                       help="備份包輸出目錄（預設工作區的 out/backup；"
+                            "可指向工作區外，例如雲端同步目錄）")
 
     p_upd = sub.add_parser(
         "update", help="每月例行：登入→fetch→fda→match→export（＋備份包）一氣呵成"
@@ -149,128 +173,145 @@ def main(argv: list[str] | None = None) -> int:
     p_probe.add_argument("--headed", action="store_true")
 
     args = ap.parse_args(argv)
+    ws = Workspace(Path.cwd())
+    session_file = ws.state_path(einvoice.SESSION)
 
     if args.cmd == "login":
-        with browser_context(session=einvoice.SESSION, headed=True, slow_mo=args.slow_mo) as ctx:
-            einvoice.login(ctx)
+        with browser_context(session_file=session_file, headed=True,
+                             slow_mo=args.slow_mo) as ctx:
+            einvoice.login(ctx, session_file)
         return 0
 
     if args.cmd == "capture":
-        cap = Capture("einvoice")
-        with browser_context(session=einvoice.SESSION, headed=True) as ctx:
+        cap = Capture(ws.new_capture("einvoice"))
+        with browser_context(session_file=session_file, headed=True) as ctx:
             root = einvoice.capture(ctx, cap)
-        conn = db.connect(args.db)
-        einvoice.ingest(root, conn)
+        with _open_db(ws) as conn:
+            einvoice.ingest(root, conn)
         return 0
 
     if args.cmd == "fetch":
-        if not Path("state/einvoice.json").exists():
+        if not session_file.exists():
             raise SystemExit("找不到登入狀態，請先執行 `twcrawl login`。")
-        conn = db.connect(args.db)
-        with browser_context(session=einvoice.SESSION, headed=args.headed) as ctx:
+        with _open_db(ws) as conn, \
+                browser_context(session_file=session_file,
+                                headed=args.headed) as ctx:
             einvoice_fetch.fetch_range(
-                ctx, conn, args.date_from, args.date_to,
+                ctx, conn, ws.new_capture("einvoice-fetch"),
+                args.date_from, args.date_to,
                 with_details=not args.no_details,
             )
         return 0
 
     if args.cmd == "ingest":
-        root = Path(args.dir) if args.dir else _latest_capture()
+        root = Path(args.dir) if args.dir else ws.latest_capture()
         print(f"解析 {root}")
-        conn = db.connect(args.db)
-        einvoice.ingest(root, conn)
+        with _open_db(ws) as conn:
+            einvoice.ingest(root, conn)
         return 0
 
     if args.cmd == "handoff":
-        root = Path(args.dir) if args.dir else _latest_capture()
+        root = Path(args.dir) if args.dir else ws.latest_capture()
         text = handoff.summarize(root)
         print(text)
-        out_path = Path("out") / f"handoff_{root.name}.txt"
-        out_path.parent.mkdir(parents=True, exist_ok=True)
+        ws.ensure_out()
+        out_path = ws.handoff_path(root.name)
         out_path.write_text(text, encoding="utf-8")
         print(f"\n（已同步存到 {out_path}）")
         return 0
 
     if args.cmd == "fda":
-        conn = db.connect(args.db)
         if args.url:
             selected = {"custom": args.url}
         elif args.source == "all":
             selected = dict(fda.SOURCES)
         else:
             selected = {args.source: fda.SOURCES[args.source]}
-        with browser_context(session=None, headed=args.headed) as ctx:
+        with _open_db(ws) as conn, \
+                browser_context(session_file=None, headed=args.headed) as ctx:
             page = ctx.new_page()
             for name, url in selected.items():
                 print(f"\n=== 來源：{name} ===")
-                fda.fetch(page, conn, url=url, max_pages=args.max_pages,
+                fda.fetch(page, conn, ws.out, url=url, max_pages=args.max_pages,
                           since=args.since, name=name)
         return 0
 
     if args.cmd == "match":
-        conn = db.connect(args.db)
-        run_match(conn, since=args.since)
+        ws.require_db()
+        with _open_db(ws) as conn:
+            run_match(conn, ws.match_report, _classifier(ws), since=args.since)
         return 0
 
     if args.cmd == "lottery":
-        conn = db.connect(args.db)
-        lottery.run_lottery(conn, fetch=not args.offline,
-                            cloud=not args.no_cloud)
+        ws.require_db()
+        with _open_db(ws) as conn:
+            lottery.run_lottery(conn, ws.cache, fetch=not args.offline,
+                                cloud=not args.no_cloud)
         return 0
 
     if args.cmd == "export":
-        conn = db.connect(args.db)
-        dash = export.write_export(conn)
+        ws.require_db()
+        with _open_db(ws) as conn:
+            dash = export.write_export(conn, ws, _classifier(ws))
         if not args.no_open:
             _open_dashboard(dash)
         return 0
 
     if args.cmd == "serve":
+        ws.require_db()
         from . import serve as serve_mod
-        serve_mod.serve(args.db, port=args.port, open_browser=not args.no_open)
+        serve_mod.serve(ws, port=args.port, open_browser=not args.no_open)
         return 0
 
     if args.cmd == "bizreg":
-        conn = db.connect(args.db)
-        bizreg.refresh(conn, force=args.force)
+        with _open_db(ws) as conn:
+            bizreg.refresh(conn, ws.bizreg_cache, force=args.force)
         return 0
 
     if args.cmd == "geocode":
-        conn = db.connect(args.db)
-        geocode.refresh(conn)
+        ws.require_db()
+        with _open_db(ws) as conn:
+            geocode.refresh(conn)
         return 0
 
     if args.cmd == "backup":
+        ws.require_db()
         pw = _backup_password()
         if not pw:
             raise SystemExit("需要備份密碼（互動輸入或設 TWCRAWL_BACKUP_PASSWORD）。")
-        backup_mod.make_backup(pw, db_path=args.db, out_dir=args.out)
+        backup_mod.make_backup(pw, ws, out_dir=args.out)
         return 0
 
     if args.cmd == "update":
-        conn = db.connect(args.db)
-        if not args.no_login:
-            print("=== 1/7 login（請在瀏覽器完成登入） ===")
-            with browser_context(session=einvoice.SESSION, headed=True) as ctx:
-                einvoice.login(ctx)
-        last = conn.execute("select max(inv_date) from invoices").fetchone()[0]
-        d_from, d_to = _auto_month_range(last, _dt.date.today())
-        print(f"=== 2/7 fetch {d_from} ～ {d_to} ===")
-        with browser_context(session=einvoice.SESSION, headed=False) as ctx:
-            einvoice_fetch.fetch_range(ctx, conn, d_from, d_to, with_details=True)
-        since = (_dt.date.today() - _dt.timedelta(days=90)).isoformat()
-        print(f"=== 3/7 fda（回溯至 {since}） ===")
-        with browser_context(session=None, headed=False) as ctx:
-            page = ctx.new_page()
-            for name, url in fda.SOURCES.items():
-                print(f"--- 來源：{name} ---")
-                fda.fetch(page, conn, url=url, max_pages=500, since=since, name=name)
-        print("=== 4/7 match ===")
-        run_match(conn)
-        print("=== 5/7 lottery ===")
-        lottery.run_lottery(conn)
-        print("=== 6/7 export ===")
-        dash = export.write_export(conn)
+        with _open_db(ws) as conn:
+            if not args.no_login:
+                print("=== 1/7 login（請在瀏覽器完成登入） ===")
+                with browser_context(session_file=session_file,
+                                     headed=True) as ctx:
+                    einvoice.login(ctx, session_file)
+            last = conn.execute(
+                "select max(inv_date) from invoices").fetchone()[0]
+            d_from, d_to = _auto_month_range(last, _dt.date.today())
+            print(f"=== 2/7 fetch {d_from} ～ {d_to} ===")
+            with browser_context(session_file=session_file, headed=False) as ctx:
+                einvoice_fetch.fetch_range(
+                    ctx, conn, ws.new_capture("einvoice-fetch"),
+                    d_from, d_to, with_details=True)
+            since = (_dt.date.today() - _dt.timedelta(days=90)).isoformat()
+            print(f"=== 3/7 fda（回溯至 {since}） ===")
+            with browser_context(session_file=None, headed=False) as ctx:
+                page = ctx.new_page()
+                for name, url in fda.SOURCES.items():
+                    print(f"--- 來源：{name} ---")
+                    fda.fetch(page, conn, ws.out, url=url, max_pages=500,
+                              since=since, name=name)
+            cl = _classifier(ws)
+            print("=== 4/7 match ===")
+            run_match(conn, ws.match_report, cl)
+            print("=== 5/7 lottery ===")
+            lottery.run_lottery(conn, ws.cache)
+            print("=== 6/7 export ===")
+            dash = export.write_export(conn, ws, cl)
         if not args.no_open:
             _open_dashboard(dash)
         if args.no_backup:
@@ -279,14 +320,15 @@ def main(argv: list[str] | None = None) -> int:
         print("=== 7/7 backup ===")
         pw = _backup_password()
         if pw:
-            backup_mod.make_backup(pw, db_path=args.db)
+            backup_mod.make_backup(pw, ws)
         else:
             print("！沒有密碼來源（非互動且未設 TWCRAWL_BACKUP_PASSWORD），跳過備份。")
         return 0
 
     if args.cmd == "probe":
-        with browser_context(session=args.session, headed=args.headed) as ctx:
-            run_probe(ctx.new_page(), args.url)
+        probe_session = ws.state_path(args.session) if args.session else None
+        with browser_context(session_file=probe_session, headed=args.headed) as ctx:
+            run_probe(ctx.new_page(), args.url, ws.probe_out)
         return 0
 
     return 1

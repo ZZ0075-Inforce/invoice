@@ -173,7 +173,7 @@ twcrawl export --no-open  # 只產出，不開瀏覽器
 地圖頁的 OSM 圖磚是唯一例外）。
 
 店家分類走兩層規則：常見連鎖與業種通用詞內建於工具；個人常去的小店寫在
-repo 根目錄 `categories.local.json`（已 gitignore），格式如下，改完重跑 `export` 即生效：
+工作區根目錄 `categories.local.json`（已 gitignore），格式如下，改完重跑 `export` 即生效：
 
 ```json
 {
@@ -248,6 +248,10 @@ twcrawl probe <url> # 頁面結構偵察報告（表格 id、表頭、分頁連�
 
 ## 產出
 
+指令一律在**工作區**內執行——工作區就是你所在的目錄，底下所有路徑都由它推出
+（沒有全域設定檔，也沒有指定路徑的旗標）。跑錯目錄時，讀取型指令會直接說
+「這裡不是 twcrawl 工作區」，而不是默默生一份空的儀表板。
+
 | 位置 | 內容 |
 |---|---|
 | `out\twcrawl.sqlite` | `invoices` / `invoice_items` / `fda_rows` |
@@ -271,7 +275,7 @@ twcrawl probe <url> # 頁面結構偵察報告（表格 id、表頭、分頁連�
 ## 測試
 
 ```powershell
-python tests\test_twcrawl.py     # 22 個測試，不需要 pytest
+python tests\test_twcrawl.py     # 34 個測試，不需要 pytest
 ```
 
 表格擷取與分頁以本機模擬的 ASP.NET 頁面驗證（含「分頁點了沒反應」與「下一頁提前消失」兩種真實壞掉情境）；解析器、比對、日期邊界、摘要遮蔽則以實際資料形狀驗證。測試會實際啟動 headless Chromium，需先完成 `playwright install`。

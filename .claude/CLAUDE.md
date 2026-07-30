@@ -16,7 +16,7 @@ FDA 目前接三個來源：中聯油脂案專區強制下架清單（edible_oil
 ```
 pip install -e .                      # 一律 editable；PyPI 上的 twcrawl 是無關的舊套件
 python -m playwright install chromium # playwright 指令找不到時用這個
-python tests/test_twcrawl.py          # 測試（31/31，不用 pytest）
+python tests/test_twcrawl.py          # 測試（34/34，不用 pytest）
 
 # 每月例行（一鍵；fetch 區間自動推算、FDA 回溯 90 天）
 twcrawl update                        # login→fetch→fda→match→lottery→export→backup
@@ -55,12 +55,27 @@ twcrawl probe <url>                   # 頁面結構偵察報告
   個人店家名（範例一律假名；連鎖名當通用設計範例可）與「使用者買了◯◯」級
   的實例；純筆數統計可。推送前掃 `origin/main..HEAD` 的全部 diff 與 commit
   訊息。本地分支 `private-history` 含個資舊歷史，**永不推向任何遠端**。
+- **路徑一律由工作區推出**（2026-07-30）：`Workspace(Path.cwd())` 是唯一來源，
+  沒有 `--db`、沒有 `--root`、沒有路徑環境變數，模組也不再有 CWD 錨定的常數
+  （`DEFAULT_DB`／`BACKUP_DIR`／`CACHE_DIR`／`LOCAL_RULES_PATH`／`STATE_DIR`／
+  `MATCH_REPORT` 全刪；`export.TEMPLATE` 是 package-relative，留）。要換工作區
+  就 cd 過去。單一路徑的函式吃那條路徑（簽章才說得出它碰什麼），多路徑的
+  （export／serve／backup）吃 ws。詞彙見 CONTEXT.md「工作區」。
 
 ## 架構
 
 ```
 src/twcrawl/
-├── cli.py        指令進入點
+├── workspace.py  工作區：所有本機路徑的單一來源（CONTEXT.md「工作區」）。
+│                 Workspace(root)——CLI 傳 Path.cwd()、測試傳 tmpdir，這兩個
+│                 adapter 就是 root 必須是參數的理由（以前測試只能 os.chdir）。
+│                 除了路徑，也收佈局知識：ensure_out/new_capture（命名＋建
+│                 responses/downloads，capture 與 fetch 共用一份）／
+│                 latest_capture（依 mtime，不是字典序——字典序會讓
+│                 einvoice-fetch-* 恆勝 einvoice-2*）／require_db（讀取型
+│                 指令的前置：不是工作區就講人話，不默默生空資料庫）。
+│                 這個模組不 import 其他 twcrawl 模組
+├── cli.py        指令進入點；建 ws 往下傳，_open_db 保證連線關閉
 ├── browser.py    Playwright session、wait_for_operator（pump！）、storage_state
 ├── netcapture.py 攔截 XHR/下載 → captures/（隨錄隨寫 index.json）
 ├── tables.py     通用表格擷取 + 分頁（含截斷警告）
@@ -237,6 +252,14 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   查詢頁店家排行/下拉改由發票聚合，跨分類店家與磚的金額一致。實測庫內
   油品發票全數改歸加油；測試 32/32。完整品項層級分類（每品項各自歸類）
   維持緩辦，等品名正規化有解
+- ✅ 工作區模組（2026-07-30，架構檢視 candidate #2）：22 個散在 12 個模組的
+  CWD 相對字面路徑收進 `workspace.py`；`--db` 移除、`backup --out` 保留（可指
+  向雲端同步目錄）。順帶修掉四件：latest_capture 字典序（`einvoice-fetch-*`
+  恆勝，`ingest`/`handoff` 選不到較新的人工 capture）、`ingest` 印模組常數而非
+  實際資料庫、`cli.py` 開 10 條 SQLite 連線一條都不關（Windows 會鎖檔）、
+  runner 只抓 `Exception` 所以逃出的 `SystemExit` 會靜默中止整輪。
+  測試 34/34（新增工作區與 CLI 端到端各一；兩個 `os.chdir` 測試不再需要 chdir；
+  備份測試補上 `state/`，ADR-0001 的紅線第一次真的被驗證）
 - ⬜ 緩辦（要做先問）：CSV 匯出、分類趨勢圖、地圖店家搜尋
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

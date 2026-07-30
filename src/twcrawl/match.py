@@ -53,9 +53,9 @@ def _fda_fields(rec: dict) -> tuple[str | None, str | None]:
     return seller, product
 
 
-def run_match(conn, since: str | None = None, out_dir: Path = Path("out"),
-              classifier: Classifier | None = None) -> dict[str, int]:
-    cl = classifier or Classifier()
+def run_match(conn, report_path: Path, classifier: Classifier,
+              since: str | None = None) -> dict[str, int]:
+    cl = classifier
     industries = dict(conn.execute(
         "select ban, industry from biz_registry where industry is not null"))
 
@@ -193,8 +193,8 @@ def run_match(conn, since: str | None = None, out_dir: Path = Path("out"),
 
     hits = seller_hits + prod_hits + news_hits
     if hits:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        report = out_dir / "match_report.csv"
+        report = Path(report_path)
+        report.parent.mkdir(parents=True, exist_ok=True)
         with report.open("w", encoding="utf-8-sig", newline="") as f:
             w = csv.DictWriter(f, fieldnames=list(hits[0].keys()))
             w.writeheader()

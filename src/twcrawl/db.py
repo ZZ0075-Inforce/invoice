@@ -7,8 +7,6 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Iterable
 
-DEFAULT_DB = Path("out/twcrawl.sqlite")
-
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS invoices (
     inv_num      TEXT PRIMARY KEY,
@@ -74,7 +72,7 @@ CREATE INDEX IF NOT EXISTS idx_fda_table ON fda_rows(table_key);
 """
 
 
-def connect(path: Path | str = DEFAULT_DB) -> sqlite3.Connection:
+def connect(path: Path | str) -> sqlite3.Connection:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
