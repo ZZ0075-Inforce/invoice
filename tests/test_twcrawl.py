@@ -1666,6 +1666,7 @@ def test_budget_loader_guards():
         bad = [
             ("[]", "最外層"),
             ('{"montly": 1}', "不認得的鍵"),      # 打錯字不能靜默變成沒設定
+            ('{"monthly": 800, "monthly": 900}', "重複"),
             ('{"monthly": -1}', "正數"),
             ('{"monthly": 0}', "正數"),
             ('{"monthly": true}', "正數"),        # bool 是 int 的子類，要擋
@@ -1679,12 +1680,13 @@ def test_budget_loader_guards():
             except SystemExit as e:
                 assert want in str(e), (text, str(e))
 
+        # 行號斷言只驗「有行號」——尾逗號的訊息與行號在 Py3.10~3.13 不同
         p.write_text('{\n "monthly": 800,\n}', encoding="utf-8")
         try:
             load_budget(p)
             raise AssertionError("語法錯該報錯卻通過")
         except SystemExit as e:
-            assert "語法錯誤" in str(e) and "第 2 行" in str(e), str(e)
+            assert "語法錯誤" in str(e) and " 行" in str(e), str(e)
     print("✓ 預算檔防呆：語法錯（含行號）、未知鍵、型別錯、非正數都給人話")
 
 
@@ -2526,38 +2528,44 @@ def test_dashboard_budget_tile():
 
     js = """() => {
       const t = [...document.querySelectorAll(".tile")]
-        .find(x => x.textContent.includes("預算"));
-      return t ? { value: t.querySelector(".value").textContent,
+        .find(x => x.textContent.includes("預算") ||
+                   x.textContent.includes("上限已用"));
+      return t ? { label: t.querySelector(".label").textContent,
+                   value: t.querySelector(".value").textContent,
                    text: t.innerText } : null;
     }"""
     variants = [
-        ("雙預算", a_payload(), "45%",
-         ["剩 NT$440", "4 個月中 2 個月超總額",
-          "非必要 NT$60／上限 NT$50（超 NT$10）", "4 個月中 2 個月破上限"]),
+        ("雙預算", a_payload(), "本月預算已用（6月）", "45%",
+         ["剩 NT$440", "超總額：3月、5月",
+          "非必要 NT$60／上限 NT$50（超 NT$10）", "破上限：4月、6月"]),
+        # 沒設總額時標籤要講清楚 120% 是「非必要上限」的比值，不是總額超支
         ("只設上限", a_payload(budget={"monthly": None, "unnecessary": 50.0}),
-         "120%", ["非必要 NT$60／上限 NT$50（超 NT$10）"]),
-        ("無設定", a_payload(budget=None), None, []),
+         "本月非必要上限已用（6月）", "120%",
+         ["非必要 NT$60／上限 NT$50（超 NT$10）", "破上限：4月、6月"]),
+        ("無設定", a_payload(budget=None), None, None, []),
     ]
     with TemporaryDirectory() as td:
         ws = Workspace(Path(td))
         with browser_context(session_file=None, headed=False) as ctx:
             _stub_tiles(ctx)
-            for label, payload, value, wants in variants:
+            for name, payload, label, value, wants in variants:
                 out = _stage_pages(ws, payload)
                 page, errs = _open(ctx, out, "dashboard.html")
-                assert not errs, f"dashboard（{label}）：{errs}"
+                assert not errs, f"dashboard（{name}）：{errs}"
                 r = page.evaluate(js)
                 if value is None:
-                    assert r is None, f"{label}：沒設定不該有預算磚——{r}"
+                    assert r is None, f"{name}：沒設定不該有預算磚——{r}"
                 else:
-                    assert r is not None, f"{label}：預算磚沒出現"
+                    assert r is not None, f"{name}：預算磚沒出現"
+                    assert r["label"] == label, (
+                        f"{name}：磚標籤該是「{label}」，實得 {r['label']!r}")
                     assert r["value"] == value, (
-                        f"{label}：磚值該是 {value}，實得 {r['value']!r}")
+                        f"{name}：磚值該是 {value}，實得 {r['value']!r}")
                     for want in wants:
                         assert want in r["text"], (
-                            f"{label}：磚上少了「{want}」——實得 {r['text']!r}")
+                            f"{name}：磚上少了「{want}」——實得 {r['text']!r}")
                 page.close()
-    print("✓ 預算磚：雙預算 45%＋各月超標數、只設上限 120%、沒設定就沒磚")
+    print("✓ 預算磚：雙預算 45%＋失守月份點名、只設上限 120%、沒設定就沒磚")
 
 
 def test_payload_contract():

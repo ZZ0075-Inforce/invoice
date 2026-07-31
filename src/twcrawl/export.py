@@ -123,21 +123,33 @@ def _load_slots(path: Path) -> dict[str, int]:
         return {}
 
 
-# 固定支出的判準。查詢頁把這些數字寫進說明文案，所以由 payload 帶過去——
-# 以前門檻在這裡、文案在 query.html，改了門檻文案不會跟著改。
 def load_budget(path: Path) -> dict | None:
     """讀預算設定（budget.local.json）；沒有檔或空設定回 None → payload 無
     budget 區塊 → 儀表板無磚。
 
     預算金額是個資（ADR-0001）：檔案在 .gitignore、錯誤訊息只印鍵名不印值。
     防呆比照 categories.load_local_config——手貼 JSON 壞掉時給人話而非
-    traceback。只有兩個合法鍵，打錯字（montly）若被靜默忽略，磚會無聲消失，
-    所以不認得的鍵直接報錯。
+    traceback，重複鍵也一樣擋（JSON 的後者會悄悄蓋掉前者）。只有兩個合法
+    鍵，打錯字（montly）若被靜默忽略，磚會無聲消失，所以不認得的鍵直接報錯。
     """
     if not path.exists():
         return None
+
+    def no_dupes(pairs):
+        d = {}
+        for k, v in pairs:
+            if k in d:
+                raise SystemExit(
+                    f"{path} 裡「{k}」重複出現——JSON 的後者會悄悄蓋掉前者，"
+                    "請留一筆再重跑。")
+            d[k] = v
+        return d
+
     try:
-        cfg = json.loads(path.read_text(encoding="utf-8"))
+        cfg = json.loads(path.read_text(encoding="utf-8"),
+                         object_pairs_hook=no_dupes)
+    except SystemExit:
+        raise
     except json.JSONDecodeError as e:
         raise SystemExit(
             f"{path} 第 {e.lineno} 行第 {e.colno} 欄有語法錯誤：{e.msg}\n"
@@ -163,6 +175,8 @@ def load_budget(path: Path) -> dict | None:
     return out if any(v is not None for v in out.values()) else None
 
 
+# 固定支出的判準。查詢頁把這些數字寫進說明文案，所以由 payload 帶過去——
+# 以前門檻在這裡、文案在 query.html，改了門檻文案不會跟著改。
 FIXED_RULE = {
     "minCount": 3,        # 至少出現幾次才算規律
     "tolAbs": 15,         # 金額相近：±max(tolAbs 元, tolPct%)

@@ -242,25 +242,30 @@ TW.page({
     const curUnn = unnByM[unnByM.length - 1].v;
     const gauge = (used, cap) => used <= cap
       ? `剩 ${nt(cap - used)}` : `超 ${nt(used - cap)}`;
+    // 失守月份點名而非只給計數——「哪些月失守」才是回顧要回答的問題
+    const monthsOver = (over, label, okText) => over.length
+      ? `${label}：${over.slice(0, 4).map(mLabel).join("、")}` +
+        (over.length > 4 ? ` 等 ${over.length} 月` : "")
+      : okText;
     const lines = [];
     let pct;
     if (b.monthly) {
       pct = last.total / b.monthly * 100;
       lines.push(`<div class="delta ${last.total <= b.monthly ? "good" : "bad"}">` +
         `${nt(last.total)}／${nt(b.monthly)}（${gauge(last.total, b.monthly)}）</div>`);
-      const over = months.filter(m => m.total > b.monthly).length;
-      if (months.length > 1) lines.push(`<div class="delta">${over
-        ? `${months.length} 個月中 ${over} 個月超總額` : "各月都在總額內"}</div>`);
+      if (months.length > 1) lines.push(`<div class="delta">${monthsOver(
+        months.filter(m => m.total > b.monthly), "超總額", "各月都在總額內")}</div>`);
     }
     if (b.unnecessary) {
       if (pct === undefined) pct = curUnn / b.unnecessary * 100;
       lines.push(`<div class="delta ${curUnn <= b.unnecessary ? "good" : "bad"}">` +
         `非必要 ${nt(curUnn)}／上限 ${nt(b.unnecessary)}（${gauge(curUnn, b.unnecessary)}）</div>`);
-      const over = unnByM.filter(x => x.v > b.unnecessary).length;
-      if (unnByM.length > 1) lines.push(`<div class="delta">${over
-        ? `${unnByM.length} 個月中 ${over} 個月破上限` : "各月都在上限內"}</div>`);
+      if (unnByM.length > 1) lines.push(`<div class="delta">${monthsOver(
+        unnByM.filter(x => x.v > b.unnecessary), "破上限", "各月都在上限內")}</div>`);
     }
-    tileDefs.splice(1, 0, { label: `本月預算已用（${mLabel(last)}）`,
+    tileDefs.splice(1, 0, {
+      label: (b.monthly ? "本月預算已用" : "本月非必要上限已用") +
+        `（${mLabel(last)}）`,
       value: Math.round(pct) + "%", extra: lines.join("") });
   }
   for (const t of tileDefs) {
