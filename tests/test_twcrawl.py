@@ -2216,7 +2216,8 @@ _TOKENS = ["--page", "--surface-1", "--text-1", "--text-2", "--muted",
 
 _PROBE_SELS = ["body", "header h1", ".sub", ".tiles", ".tile", ".card", ".desc",
                ".note", ".scrollx", "table", "table th", "td.num", ".wrap",
-               "button.theme", "#stat", "button.chip", "i.swatch", ".empty"]
+               "button.theme", "#stat", "button.chip", "i.swatch", ".empty",
+               ".trend", ".trend .head", ".trend .head .tot"]
 
 _PROBE_PROPS = ["color", "background-color", "font-size", "font-weight",
                 "margin-top", "margin-bottom", "padding-top", "border-radius",
@@ -2432,7 +2433,7 @@ def test_dashboard_trend_hover_tooltip():
 
     js = """() => {
       const cell = [...document.querySelectorAll(".trend .cell")]
-        .find(c => c.querySelector(".t").textContent.includes("超市"));
+        .find(c => c.querySelector(".head").textContent.includes("超市"));
       if (!cell) return { err: "趨勢圖沒有「超市」那格" };
       const hits = cell.querySelectorAll("svg rect[fill='transparent']");
       if (hits.length < 3) return { err: "月份 hit 區塊不足：" + hits.length };
@@ -2454,7 +2455,19 @@ def test_dashboard_trend_hover_tooltip():
                 assert want in r["tip"], (
                     f"趨勢圖 tooltip 少了「{want}」——實得：{r['tip']!r}")
             page.close()
-    print("✓ 分類趨勢圖 hover tooltip 顯示月份・分類・金額")
+
+            # 單月資料庫沒有「走向」可言（x 會除以零）：整卡不出現、頁面照常
+            single = a_payload(months=a_payload()["months"][:1])
+            out2 = _stage_pages(Workspace(Path(td)), single)
+            page, errs = _open(ctx, out2, "dashboard.html")
+            assert not errs, f"dashboard（單月）：{errs}"
+            n = page.evaluate("document.querySelectorAll('.trend').length")
+            assert n == 0, "單月資料庫不該畫趨勢卡（沒有走向、x 會除以零）"
+            assert page.evaluate(
+                "document.body.innerText.includes('每月支出')"), \
+                "單月資料庫的儀表板不該整頁空白"
+            page.close()
+    print("✓ 分類趨勢圖：hover tooltip 顯示月份・分類・金額；單月不畫趨勢卡")
 
 
 def test_payload_contract():

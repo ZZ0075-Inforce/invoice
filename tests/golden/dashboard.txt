@@ -121,22 +121,22 @@
     div.desc  "各分類逐月金額走向，一分類一格、刻度各自獨立（右上為該格峰值）；顏色與上圖一致；滑過看單月金額、點格子進查詢頁；數字同上圖的「以表格檢視」"
     div.trend
       div.cell
-        div.t  "電信"
+        div.head  "電信"
           i.swatch
           span.tot  "NT$1,797"
         svg [circle*4 line*1 path*2 rect*4 text*3]
       div.cell
-        div.t  "超市"
+        div.head  "超市"
           i.swatch
           span.tot  "NT$750"
         svg [circle*4 line*1 path*2 rect*4 text*3]
       div.cell
-        div.t  "手搖飲"
+        div.head  "手搖飲"
           i.swatch
           span.tot  "NT$120"
         svg [circle*4 line*1 path*2 rect*4 text*3]
       div.cell
-        div.t  "其他（含未分類）"
+        div.head  "其他（含未分類）"
           i.swatch
           span.tot  "NT$100"
         svg [circle*4 line*1 path*2 rect*4 text*3]
@@ -286,6 +286,9 @@
 @style button.chip  (無此元素)
 @style i.swatch  color=rgb(82, 81, 78) background-color=rgb(42, 120, 214) font-size=12px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=3px border-top-width=0px display=block
 @style .empty  (無此元素)
+@style .trend  color=rgb(11, 11, 11) background-color=rgba(0, 0, 0, 0) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=grid
+@style .trend .head  color=rgb(82, 81, 78) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=flex
+@style .trend .head .tot  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
 ── 深色（data-theme）
 @tokens --page=#0d0d0d --surface-1=#1a1a19 --text-1=#ffffff --text-2=#c3c2b7 --muted=#898781 --border=rgba(255,255,255,0.10) --grid=#2c2c2a --baseline=#383835 --other=#898781 --s1=#3987e5 --s2=#d95926 --s3=#199e70 --s4=#c98500 --s5=#d55181 --s6=#008300 --warning=#fab219 --serious=#ec835a --event=— --up-good=#0ca30c
 @style body  color=rgb(255, 255, 255) background-color=rgb(13, 13, 13) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=24px border-radius=0px border-top-width=0px display=block
@@ -306,6 +309,9 @@
 @style button.chip  (無此元素)
 @style i.swatch  color=rgb(195, 194, 183) background-color=rgb(42, 120, 214) font-size=12px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=3px border-top-width=0px display=block
 @style .empty  (無此元素)
+@style .trend  color=rgb(255, 255, 255) background-color=rgba(0, 0, 0, 0) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=grid
+@style .trend .head  color=rgb(195, 194, 183) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=flex
+@style .trend .head .tot  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
 ── 深色（prefers-color-scheme）
 @tokens --page=#0d0d0d --surface-1=#1a1a19 --text-1=#ffffff --text-2=#c3c2b7 --muted=#898781 --border=rgba(255,255,255,0.10) --grid=#2c2c2a --baseline=#383835 --other=#898781 --s1=#3987e5 --s2=#d95926 --s3=#199e70 --s4=#c98500 --s5=#d55181 --s6=#008300 --warning=#fab219 --serious=#ec835a --event=— --up-good=#0ca30c
 @style body  color=rgb(255, 255, 255) background-color=rgb(13, 13, 13) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=24px border-radius=0px border-top-width=0px display=block
@@ -326,3 +332,6 @@
 @style button.chip  (無此元素)
 @style i.swatch  color=rgb(195, 194, 183) background-color=rgb(42, 120, 214) font-size=12px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=3px border-top-width=0px display=block
 @style .empty  (無此元素)
+@style .trend  color=rgb(255, 255, 255) background-color=rgba(0, 0, 0, 0) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=grid
+@style .trend .head  color=rgb(195, 194, 183) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=flex
+@style .trend .head .tot  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block

@@ -465,12 +465,15 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
 - ✅ 儀表板分類趨勢圖（2026-08-01，issue #11）：圖形式定案**小倍數折線**——
   問題是「單一分類的走向」，七系列疊同一張是麵條圖、堆疊面積中段讀不出
   個別走勢；一分類一格、格頭合計＋格上峰值、首尾月標籤，其他（含未分類）
-  一格中性灰。y 刻度各格獨立（金額差一個量級）；顏色走 cats.of 同色槽；
-  hover tooltip（月／分類／金額／佔當月%）、點格進查詢頁。純頁面改動、
-  payload 未動；驗證器亮暗兩模式 ALL PASS（亮色 3 槽 <3:1 WARN 既有，
-  格頭直接標籤＋表格參照作 relief）；golden 只有 dashboard +24 行；
-  真實資料 7 格零 JS 錯誤。新增 tooltip 內容測試（golden 拍不到事件驅動
-  的 tooltip）。測試 51→52
+  一格中性灰。y 刻度各格獨立（金額差一個量級）；顏色走 cats.at 同色槽；
+  hover tooltip（月／分類／金額／佔當月%）、點格進查詢頁——「其他」格
+  不給點（查詢頁表達不了「不在色槽內的那群」，連過去金額對不上）。
+  純頁面改動、payload 未動；驗證器亮暗兩模式 ALL PASS（亮色 3 槽 <3:1
+  WARN 既有，格頭直接標籤＋表格參照作 relief）；真實資料 7 格零 JS
+  錯誤。新增 tooltip 內容測試（golden 拍不到事件驅動的 tooltip）＋單月
+  不畫趨勢卡；樣式探針補 .trend 三選擇器。兩軸 review 後補修四件：
+  探針、單月測試、「其他」格拿掉點擊、命名（.t→.head、mT2→padT）。
+  測試 51→52
 - ⬜ 緩辦（要做先問）：CSV 匯出（分類趨勢圖已做＝#11；地圖店家搜尋立案為 #15）
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

@@ -42,10 +42,10 @@
   .swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
   .trend { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
            gap: 8px 18px; }
-  .trend .t { display: flex; align-items: center; gap: 5px;
-              font-size: 12px; color: var(--text-2); }
-  .trend .t .tot { margin-left: auto; color: var(--muted);
-                   font-variant-numeric: tabular-nums; }
+  .trend .head { display: flex; align-items: center; gap: 5px;
+                 font-size: 12px; color: var(--text-2); }
+  .trend .head .tot { margin-left: auto; color: var(--muted);
+                      font-variant-numeric: tabular-nums; }
   svg { display: block; width: 100%; height: auto; }
   svg text { font-family: inherit; }
 
@@ -405,9 +405,10 @@ TW.page({
   // ---- 分類趨勢（小倍數折線；issue #11） --------------------------------
   // 形式定案：小倍數，不是堆疊面積也不是多線——要回答的是「某分類是不是
   // 越來越多」，一分類一格各自可讀；七個系列疊同一張只會纏成一團，堆疊
-  // 面積的中段讀不出個別走勢。顏色沿用月柱的色槽（cats.of），其他（含
-  // 未分類）維持中性灰。各格 y 刻度獨立（分類金額差一個量級，共用刻度
+  // 面積的中段讀不出個別走勢。顏色沿用月柱的色槽（cats.at，超出 top 的
+  // 其他落中性灰）。各格 y 刻度獨立（分類金額差一個量級，共用刻度
   // 會把小分類壓成平線），格頭的合計與格上的峰值補回量級感。
+  // 單月資料庫沒有「走向」可言（x 也會除以零），整卡不出現。
   if (months.length >= 2) {
     const tCard = el("div", "card");
     tCard.append(el("h2", null, "分類趨勢"));
@@ -419,15 +420,15 @@ TW.page({
     series.forEach((s, si) => {
       const vals = months.map(m => m.by[s] || 0);
       const cell = el("div", "cell");
-      cell.append(el("div", "t",
+      cell.append(el("div", "head",
         `<i class="swatch" style="background:${color(si)}"></i>${esc(s)}` +
         `<span class="tot">${compact(vals.reduce((a, b) => a + b, 0))}</span>`));
-      const W = 240, H = 92, mX = 6, mT2 = 16, mB2 = 16;
-      const iw = W - mX * 2, ih = H - mT2 - mB2;
+      const W = 240, H = 92, mX = 6, padT = 16, padB = 16;
+      const iw = W - mX * 2, ih = H - padT - padB;
       const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}` });
       const max = Math.max(1, ...vals);
       const x = i => mX + iw * i / (months.length - 1);
-      const y = v => mT2 + ih - v / max * ih;
+      const y = v => padT + ih - v / max * ih;
       svg.append(svgEl("line", { x1: mX, x2: W - mX, y1: y(0), y2: y(0),
         stroke: css("--baseline"), "stroke-width": 1 }));
       const pk = svgEl("text", { x: W - mX, y: 10, "text-anchor": "end",
@@ -464,11 +465,15 @@ TW.page({
             `<div class="tt-row"><span>佔當月</span><span class="v">${pct}%</span></div>`);
         });
         hit.addEventListener("mouseleave", hideTip);
-        hit.style.cursor = "pointer";
-        hit.addEventListener("click", () => {
-          const cat = s !== OTHER ? `&cat=${encodeURIComponent(s)}` : "";
-          location.href = `query.html?from=${m.month}&to=${m.month}${cat}`;
-        });
+        // 「其他」格不給點：查詢頁表達不了「不在色槽內的那群」，連過去
+        // 只能看整月全部發票，金額對不上格內數字，是誤導不是導覽
+        if (s !== OTHER) {
+          hit.style.cursor = "pointer";
+          hit.addEventListener("click", () => {
+            location.href = `query.html?from=${m.month}&to=${m.month}` +
+              `&cat=${encodeURIComponent(s)}`;
+          });
+        }
         svg.append(hit);
       });
       cell.append(svg);
