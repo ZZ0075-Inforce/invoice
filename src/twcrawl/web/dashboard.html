@@ -40,6 +40,12 @@
   .legend.picking button.leg:not(.sel) { opacity: 0.4; }
   .legend button.leg.sel { font-weight: 650; }
   .swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .trend { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+           gap: 8px 18px; }
+  .trend .t { display: flex; align-items: center; gap: 5px;
+              font-size: 12px; color: var(--text-2); }
+  .trend .t .tot { margin-left: auto; color: var(--muted);
+                   font-variant-numeric: tabular-nums; }
   svg { display: block; width: 100%; height: auto; }
   svg text { font-family: inherit; }
 
@@ -395,6 +401,82 @@ TW.page({
   mTable.append(mtWrap);
   mCard.append(mTable);
   app.append(mCard);
+
+  // ---- 分類趨勢（小倍數折線；issue #11） --------------------------------
+  // 形式定案：小倍數，不是堆疊面積也不是多線——要回答的是「某分類是不是
+  // 越來越多」，一分類一格各自可讀；七個系列疊同一張只會纏成一團，堆疊
+  // 面積的中段讀不出個別走勢。顏色沿用月柱的色槽（cats.of），其他（含
+  // 未分類）維持中性灰。各格 y 刻度獨立（分類金額差一個量級，共用刻度
+  // 會把小分類壓成平線），格頭的合計與格上的峰值補回量級感。
+  if (months.length >= 2) {
+    const tCard = el("div", "card");
+    tCard.append(el("h2", null, "分類趨勢"));
+    tCard.append(el("div", "desc",
+      "各分類逐月金額走向，一分類一格、刻度各自獨立（右上為該格峰值）；" +
+      "顏色與上圖一致；滑過看單月金額、點格子進查詢頁；" +
+      "數字同上圖的「以表格檢視」"));
+    const grid = el("div", "trend");
+    series.forEach((s, si) => {
+      const vals = months.map(m => m.by[s] || 0);
+      const cell = el("div", "cell");
+      cell.append(el("div", "t",
+        `<i class="swatch" style="background:${color(si)}"></i>${esc(s)}` +
+        `<span class="tot">${compact(vals.reduce((a, b) => a + b, 0))}</span>`));
+      const W = 240, H = 92, mX = 6, mT2 = 16, mB2 = 16;
+      const iw = W - mX * 2, ih = H - mT2 - mB2;
+      const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}` });
+      const max = Math.max(1, ...vals);
+      const x = i => mX + iw * i / (months.length - 1);
+      const y = v => mT2 + ih - v / max * ih;
+      svg.append(svgEl("line", { x1: mX, x2: W - mX, y1: y(0), y2: y(0),
+        stroke: css("--baseline"), "stroke-width": 1 }));
+      const pk = svgEl("text", { x: W - mX, y: 10, "text-anchor": "end",
+        "font-size": 9.5, fill: css("--muted") });
+      pk.textContent = "最高 " + Math.round(max).toLocaleString("zh-TW");
+      svg.append(pk);
+      const pts = vals.map((v, i) => x(i) + "," + y(v));
+      svg.append(svgEl("path", {
+        d: `M${pts.join(" L")} L${x(vals.length - 1)},${y(0)} L${x(0)},${y(0)} Z`,
+        fill: color(si), "fill-opacity": 0.08 }));
+      svg.append(svgEl("path", { d: `M${pts.join(" L")}`, fill: "none",
+        stroke: color(si), "stroke-width": 2,
+        "stroke-linejoin": "round", "stroke-linecap": "round" }));
+      vals.forEach((v, i) => svg.append(svgEl("circle",
+        { cx: x(i), cy: y(v), r: 2.5, fill: color(si) })));
+      [0, months.length - 1].forEach(i => {
+        const t = svgEl("text", { x: x(i), y: H - 4,
+          "text-anchor": i === 0 ? "start" : "end",
+          "font-size": 9.5, fill: css("--muted") });
+        t.textContent = mLabel(months[i]);
+        svg.append(t);
+      });
+      const half = iw / (months.length - 1) / 2;
+      months.forEach((m, i) => {
+        const x0 = Math.max(mX, x(i) - half);
+        const hit = svgEl("rect", { x: x0, y: 0,
+          width: Math.min(W - mX, x(i) + half) - x0, height: H,
+          fill: "transparent" });
+        hit.addEventListener("mousemove", evt => {
+          const v = m.by[s] || 0;
+          const pct = m.total > 0 ? Math.round(v / m.total * 100) : 0;
+          showTip(evt, `<div class="tt-title">${esc(m.month)}・${esc(s)}</div>` +
+            `<div class="tt-row"><span>金額</span><span class="v">${nt(v)}</span></div>` +
+            `<div class="tt-row"><span>佔當月</span><span class="v">${pct}%</span></div>`);
+        });
+        hit.addEventListener("mouseleave", hideTip);
+        hit.style.cursor = "pointer";
+        hit.addEventListener("click", () => {
+          const cat = s !== OTHER ? `&cat=${encodeURIComponent(s)}` : "";
+          location.href = `query.html?from=${m.month}&to=${m.month}${cat}`;
+        });
+        svg.append(hit);
+      });
+      cell.append(svg);
+      grid.append(cell);
+    });
+    tCard.append(grid);
+    app.append(tCard);
+  }
 
   // ---- 消費日曆（每日熱力格，GitHub contributions 風；週一為首） --------
   // 顏色是 magnitude 工作：單一色相（--s1）以透明度分階，不占分類色槽；

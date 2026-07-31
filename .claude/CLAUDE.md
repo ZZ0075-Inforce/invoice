@@ -16,7 +16,7 @@ FDA 目前接三個來源：中聯油脂案專區強制下架清單（edible_oil
 ```
 pip install -e .                      # 一律 editable；PyPI 上的 twcrawl 是無關的舊套件
 python -m playwright install chromium # playwright 指令找不到時用這個
-python tests/test_twcrawl.py          # 測試（51/51，不用 pytest）
+python tests/test_twcrawl.py          # 測試（52/52，不用 pytest）
 python tests/test_twcrawl.py --update-golden   # 有意改動四頁畫面後重生 tests/golden/
 
 # 每月例行（一鍵；fetch 區間自動推算、FDA 回溯 90 天只給 feed 型來源）
@@ -188,7 +188,9 @@ src/twcrawl/
 │                 與 fda 值不一致）、--serious（只有 dashboard 且沒人用）、--event
 │                 （只有食安頁用）、body/button.theme/h1（地圖是全視窗版面）
 ├── web/dashboard.html  月報模板（零相依 SVG 圖表、hover tooltip、亮暗切換鈕
-│                 localStorage twcrawl-theme 三頁共用；FDA 命中明細卡；非必要表
+│                 localStorage twcrawl-theme 三頁共用；分類趨勢＝小倍數折線，
+│                 一分類一格、y 刻度各自獨立（分類金額差一個量級，共用刻度會把
+│                 小分類壓成平線）；FDA 命中明細卡；非必要表
 │                 只列近 10 筆其餘導查詢頁；調色盤 6 色槽過 dataviz 驗證器兩模式）
 ├── web/query.html 查詢頁（發票清單搜尋/篩選/逐張展開品項、店家查詢、固定支出偵測——
 │                 同店家＋金額相近 ±max(15,5%)＋週期 25–400 天＋至少 3 次；
@@ -460,7 +462,16 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   fixture slot 恰與排名重合，擋不住 ui.js 回歸成排名取色，這支直接斷言
   dashboard 與 map 圖例 swatch 落在指派槽色上（退回排名取色驗證過會紅）。
   測試 49→51
-- ⬜ 緩辦（要做先問）：CSV 匯出、分類趨勢圖、地圖店家搜尋
+- ✅ 儀表板分類趨勢圖（2026-08-01，issue #11）：圖形式定案**小倍數折線**——
+  問題是「單一分類的走向」，七系列疊同一張是麵條圖、堆疊面積中段讀不出
+  個別走勢；一分類一格、格頭合計＋格上峰值、首尾月標籤，其他（含未分類）
+  一格中性灰。y 刻度各格獨立（金額差一個量級）；顏色走 cats.of 同色槽；
+  hover tooltip（月／分類／金額／佔當月%）、點格進查詢頁。純頁面改動、
+  payload 未動；驗證器亮暗兩模式 ALL PASS（亮色 3 槽 <3:1 WARN 既有，
+  格頭直接標籤＋表格參照作 relief）；golden 只有 dashboard +24 行；
+  真實資料 7 格零 JS 錯誤。新增 tooltip 內容測試（golden 拍不到事件驅動
+  的 tooltip）。測試 51→52
+- ⬜ 緩辦（要做先問）：CSV 匯出（分類趨勢圖已做＝#11；地圖店家搜尋立案為 #15）
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive
 - ⬜ 未決：要不要回溯更早月份（明細僅保存近 6 個月，更早只抓得到表頭）

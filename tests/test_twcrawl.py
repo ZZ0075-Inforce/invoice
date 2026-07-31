@@ -2422,6 +2422,41 @@ def test_pages_color_by_slot_not_rank():
     print("✓ 取色跟槽位走：slot 與排名錯開時，dashboard 與 map 仍照指派上色")
 
 
+def test_dashboard_trend_hover_tooltip():
+    """分類趨勢圖 hover 顯示月份・分類・金額（issue #11 驗收）。
+
+    golden 只拍得到 SVG 的元素統計，tooltip 是事件驅動的——這裡對「超市」
+    那格的第 3 個月（2026-05，金額 200）派 mousemove，直接驗 tooltip 內容。
+    """
+    from twcrawl.workspace import Workspace
+
+    js = """() => {
+      const cell = [...document.querySelectorAll(".trend .cell")]
+        .find(c => c.querySelector(".t").textContent.includes("超市"));
+      if (!cell) return { err: "趨勢圖沒有「超市」那格" };
+      const hits = cell.querySelectorAll("svg rect[fill='transparent']");
+      if (hits.length < 3) return { err: "月份 hit 區塊不足：" + hits.length };
+      const r = hits[2].getBoundingClientRect();
+      hits[2].dispatchEvent(new MouseEvent("mousemove",
+        { clientX: r.x + r.width / 2, clientY: r.y + r.height / 2,
+          bubbles: true }));
+      return { tip: document.getElementById("tooltip").innerText };
+    }"""
+    with TemporaryDirectory() as td:
+        out = _stage_pages(Workspace(Path(td)), a_payload())
+        with browser_context(session_file=None, headed=False) as ctx:
+            _stub_tiles(ctx)
+            page, errs = _open(ctx, out, "dashboard.html")
+            assert not errs, f"dashboard：{errs}"
+            r = page.evaluate(js)
+            assert "err" not in r, f"趨勢圖結構不對：{r['err']}"
+            for want in ("2026-05", "超市", "200"):
+                assert want in r["tip"], (
+                    f"趨勢圖 tooltip 少了「{want}」——實得：{r['tip']!r}")
+            page.close()
+    print("✓ 分類趨勢圖 hover tooltip 顯示月份・分類・金額")
+
+
 def test_payload_contract():
     """a_payload() 的形狀必須跟 export.build_payload 一致，手打的 fixture 才漂不掉。"""
     from twcrawl import export, lottery

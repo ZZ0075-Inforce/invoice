@@ -117,6 +117,30 @@
               td.num  "0"
               td.num  "360"
   div.card
+    h2  "分類趨勢"
+    div.desc  "各分類逐月金額走向，一分類一格、刻度各自獨立（右上為該格峰值）；顏色與上圖一致；滑過看單月金額、點格子進查詢頁；數字同上圖的「以表格檢視」"
+    div.trend
+      div.cell
+        div.t  "電信"
+          i.swatch
+          span.tot  "NT$1,797"
+        svg [circle*4 line*1 path*2 rect*4 text*3]
+      div.cell
+        div.t  "超市"
+          i.swatch
+          span.tot  "NT$750"
+        svg [circle*4 line*1 path*2 rect*4 text*3]
+      div.cell
+        div.t  "手搖飲"
+          i.swatch
+          span.tot  "NT$120"
+        svg [circle*4 line*1 path*2 rect*4 text*3]
+      div.cell
+        div.t  "其他（含未分類）"
+          i.swatch
+          span.tot  "NT$100"
+        svg [circle*4 line*1 path*2 rect*4 text*3]
+  div.card
     h2  "消費日曆"
     div.desc  "一天一格、顏色深＝當日花得多（非零日四分位分階）；滑過看金額筆數、點格子到查詢頁看該日發票"
     svg [rect*98 text*10]
