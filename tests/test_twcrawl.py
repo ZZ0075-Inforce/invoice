@@ -2014,7 +2014,7 @@ def test_cli_wires_paths_through_workspace():
     print("✓ CLI：產物全落在工作區、match→export 路徑同源、--db 已移除")
 
 
-# ------------------------------------------------------ 四頁煙霧測試 -----
+# ------------------------------------------------------ 五頁煙霧測試 -----
 #
 # 這些測試喂頁面「合成 payload」，不指向 out/。原因不是圖方便：out/ 是真實
 # 消費紀錄，斷言一旦寫上真實金額與店家名就進不了 repo（見 CLAUDE.md 的個資
@@ -2034,12 +2034,13 @@ PAGE_ROOTS = {
     "dashboard.html": ["#app"],
     "query.html": ["#app"],
     "fda.html": ["#app"],
+    "year.html": ["#app"],
     "map.html": ["#chips", "#legend", "#stat", "#nogeo", "#sellergeo"],
 }
 
 
 def a_payload(**overrides) -> dict:
-    """合成的 data.js payload——四頁煙霧測試的輸入。
+    """合成的 data.js payload——五頁煙霧測試的輸入。
 
     四個月、九張發票，數字刻意小而可心算，好讓 golden 快照的 diff 讀得懂：
     電信 599×3（構成固定支出）、超市 250/200/300、手搖飲 60×2（非必要）、
@@ -2146,6 +2147,30 @@ def a_payload(**overrides) -> dict:
         # 預算磚可心算：6月 360/800=45%（剩 440）、3月 849 與 5月 899 超總額；
         # 非必要 4月/6月各 60 都破上限 50（本月超 10）
         "budget": {"monthly": 800.0, "unnecessary": 50.0},
+        # 年度回顧：總額 2767、單筆最大與最貴的一天同為 AA1（599 三張同額
+        # 取最早）、對獎 1 筆 200、參加 4 張（11503 期）
+        "year": {
+            "year": "2026", "total": 2767.0, "count": 9, "months": 4,
+            "monthlyAvg": 691.75,
+            "byCategory": [
+                {"name": "電信", "total": 1797.0},
+                {"name": "超市", "total": 750.0},
+                {"name": "手搖飲", "total": 120.0},
+                {"name": "未分類", "total": 100.0},
+            ],
+            "sellers": [
+                {"name": "測試電信", "total": 1797.0, "count": 3},
+                {"name": "測試超市", "total": 750.0, "count": 3},
+                {"name": "珍奶測試店", "total": 120.0, "count": 2},
+                {"name": "神秘測試舖", "total": 100.0, "count": 1},
+            ],
+            "unnecessary": {"total": 120.0, "count": 2},
+            "lottery": {"wins": 1, "amount": 200, "invoices": 4},
+            "maxInvoice": {"num": "AA1", "date": "2026-03-05",
+                           "seller": "測試電信", "category": "電信",
+                           "amount": 599.0},
+            "maxDay": {"date": "2026-03-05", "total": 599.0, "count": 1},
+        },
     }
     payload.update(overrides)
     return payload
@@ -2166,7 +2191,7 @@ def _replace_strings(obj, mapping: dict[str, str]):
 
 
 def _stage_pages(ws, payload: dict) -> Path:
-    """把 payload 與四頁模板就位到工作區的 out/，回傳該目錄。
+    """把 payload 與五頁模板就位到工作區的 out/，回傳該目錄。
 
     刻意不走 export.write_export：這裡測的是「頁面吃 payload」，
     不該把 export 的資料庫存取也拖進來。
@@ -2306,7 +2331,7 @@ def _digest(page, page_name: str) -> str:
 
     raw = page.evaluate(_DIGEST_JS, PAGE_ROOTS[page_name])
     # 儀表板的資料鮮度用牆上時鐘算天數（dashboard.html 的 staleDays），
-    # 是四頁唯一會讓快照每天變動的東西
+    # 是五頁唯一會讓快照每天變動的東西
     dom = re.sub(r"已 \d+ 天", "已 N 天", raw)
     # 樣式探針會改 data-theme 與模擬媒體，所以一定排在 DOM 快照之後
     return dom + "\n\n" + _style_probe(page)
@@ -2335,7 +2360,7 @@ def _check_golden(name: str, digest: str) -> None:
 
 
 def test_pages_render_and_match_golden():
-    """四頁（含兩個深連結變體）以合成 payload 渲染：零錯誤、結構與快照一致。"""
+    """五頁（含深連結變體）以合成 payload 渲染：零錯誤、結構與快照一致。"""
     from urllib.parse import quote
 
     from twcrawl.workspace import Workspace
@@ -2346,6 +2371,7 @@ def test_pages_render_and_match_golden():
         ("query-fixed", "query.html", "?view=fixed"),
         ("query-cat", "query.html", "?cat=" + quote("手搖飲")),
         ("fda", "fda.html", "?src=csm_news"),
+        ("year", "year.html", ""),
         ("map", "map.html", ""),
     ]
     with TemporaryDirectory() as td:
@@ -2360,7 +2386,7 @@ def test_pages_render_and_match_golden():
                 assert digest.strip(), f"{name} 什麼都沒渲染"
                 _check_golden(name, digest)
                 page.close()
-    print("✓ 四頁以合成 payload 渲染：零 JS 錯誤、結構快照一致（含深連結變體）")
+    print("✓ 五頁以合成 payload 渲染：零 JS 錯誤、結構快照一致（含深連結變體）")
 
 
 def test_pages_survive_hostile_and_edge_payloads():
@@ -2421,7 +2447,7 @@ def test_pages_survive_hostile_and_edge_payloads():
                         " && document.body.innerText.trim().length > 0")
                     assert filled, f"{page_name}／{label}：整頁空白"
                     page.close()
-    print("✓ 四頁：惡意字串不進 DOM、殘缺 payload 不讓整頁空白")
+    print("✓ 五頁：惡意字串不進 DOM、殘缺 payload 不讓整頁空白")
 
 
 def test_pages_color_by_slot_not_rank():
@@ -2453,14 +2479,30 @@ def test_pages_color_by_slot_not_rank():
       return { got, s1: slot(1), s3: slot(3), s6: slot(6) };
     }"""
 
+    # 年度頁的佔比條是 inline 取色（.brow .fill），DOM 快照拍不到，一起驗
+    js_year = """() => {
+      const norm = c => { const d = document.createElement("i");
+        d.style.color = c; document.body.appendChild(d);
+        const v = getComputedStyle(d).color; d.remove(); return v; };
+      const slot = n => norm(getComputedStyle(document.documentElement)
+        .getPropertyValue("--s" + n).trim());
+      const got = {};
+      for (const row of document.querySelectorAll(".brow")) {
+        got[row.querySelector(".name").textContent.trim()] =
+          norm(getComputedStyle(row.querySelector(".fill")).backgroundColor);
+      }
+      return { got, s1: slot(1), s3: slot(3), s6: slot(6) };
+    }"""
+
     with TemporaryDirectory() as td:
         out = _stage_pages(Workspace(Path(td)), payload)
         with browser_context(session_file=None, headed=False) as ctx:
             _stub_tiles(ctx)
-            for page_name in ("dashboard.html", "map.html"):
+            for page_name, probe in (("dashboard.html", js), ("map.html", js),
+                                     ("year.html", js_year)):
                 page, errs = _open(ctx, out, page_name)
                 assert not errs, f"{page_name}：{errs}"
-                r = page.evaluate(js)
+                r = page.evaluate(probe)
                 for name, key in (("電信", "s3"), ("超市", "s1"),
                                   ("手搖飲", "s6")):
                     assert r["got"].get(name) == r[key], (
@@ -2468,7 +2510,7 @@ def test_pages_color_by_slot_not_rank():
                         f"--{key}，實得 {r['got'].get(name)!r}"
                         "——取色不得回到金額排名")
                 page.close()
-    print("✓ 取色跟槽位走：slot 與排名錯開時，dashboard 與 map 仍照指派上色")
+    print("✓ 取色跟槽位走：slot 與排名錯開時，dashboard／map／year 照指派上色")
 
 
 def test_dashboard_trend_hover_tooltip():

@@ -376,6 +376,59 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
         lottery["next"] = {"label": lottery_mod.period_label(np_),
                           "drawDate": nd, "pending": pending}
 
+    # 年度回顧（issue #13）：日曆年至今的全貌，統計與亮點都是「Python 決定
+    # 的事實」，頁面只排版不重複聚合。年度＝庫內最新發票的年份，不用牆上
+    # 時鐘——一月還沒抓新資料時不會出一頁空回顧，golden 也不吃當下日期。
+    # 同額並列時取最早的（invoice_rows 依日期升冪，max 回傳第一個最大值）。
+    year = None
+    if invoice_rows:
+        yr = max(v["date"] for v in invoice_rows)[:4]
+        yr_rows = [v for v in invoice_rows if v["date"].startswith(yr)]
+        unn_cats = {c["name"] for c in cats.values() if c["unnecessary"]}
+        by_cat: dict[str, float] = defaultdict(float)
+        by_seller: dict[str, dict] = {}
+        by_day: dict[str, dict] = {}
+        unn = {"total": 0.0, "count": 0}
+        for v in yr_rows:
+            by_cat[v["category"]] += v["amount"]
+            s = by_seller.setdefault(
+                v["seller"], {"name": v["seller"], "total": 0.0, "count": 0})
+            s["total"] += v["amount"]
+            s["count"] += 1
+            d = by_day.setdefault(
+                v["date"], {"date": v["date"], "total": 0.0, "count": 0})
+            d["total"] += v["amount"]
+            d["count"] += 1
+            if v["category"] in unn_cats:
+                unn["total"] += v["amount"]
+                unn["count"] += 1
+        total = sum(v["amount"] for v in yr_rows)
+        n_months = len({v["date"][:7] for v in yr_rows})
+        top_inv = max(yr_rows, key=lambda v: v["amount"])
+        wins = [w for p in lottery["periods"] for w in p["wins"]
+                if w["date"].startswith(yr)]
+        lot_inv = sum(
+            p["nInvoices"] for p in lottery["periods"]
+            if all(m.startswith(yr)
+                   for m in lottery_mod.period_months(p["period"])))
+        year = {
+            "year": yr, "total": total, "count": len(yr_rows),
+            "months": n_months, "monthlyAvg": total / n_months,
+            "byCategory": sorted(
+                ({"name": k, "total": t} for k, t in by_cat.items()),
+                key=lambda c: -c["total"]),
+            "sellers": sorted(by_seller.values(),
+                              key=lambda s: -s["total"])[:10],
+            "unnecessary": unn,
+            "lottery": {"wins": len(wins),
+                        "amount": sum(w["prizeAmount"] for w in wins),
+                        "invoices": lot_inv},
+            "maxInvoice": {k: top_inv[k]
+                           for k in ("num", "date", "seller", "category",
+                                     "amount")},
+            "maxDay": max(by_day.values(), key=lambda d: d["total"]),
+        }
+
     # 色槽：沿用上次指派（工作區本機狀態），新分類取空槽——跨次匯出
     # 同分類同色。serve 的重生也走這裡，兩條路徑不可能分岔。
     cat_rows = sorted(cats.values(), key=lambda c: -c["total"])
@@ -416,6 +469,8 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
     budget = load_budget(ws.budget)
     if budget:
         payload["budget"] = budget
+    if year:
+        payload["year"] = year
     return payload
 
 

@@ -203,6 +203,10 @@ src/twcrawl/
 │                 品項覆寫後店家可跨分類，發票聚合才與磚的金額天生一致）
 ├── web/fda.html  食安頁（總覽：來源表＋三層級判讀基準；依來源自動分頁，
 │                 事件/監測標示；深連結 ?src=<key>；月報只留磚、明細全在這）
+├── web/year.html 年度回顧（日曆年至今：統計磚＋亮點卡＋分類佔比條＋店家
+│                 排行。資料全來自 payload.year——年度＝庫內最新發票的年份
+│                 不是牆上時鐘，統計與亮點由 build_payload 出、頁面只排版；
+│                 佔比條 inline 取 cats.of 槽色，slot 錯開測試涵蓋本頁）
 ├── web/map.html  消費地圖（Leaflet vendored 不走 CDN；OSM 圖磚＝ADR-0001 明確例外；
 │                 圓點色=分類、大小=金額；時間區間篩選＋圖例點選隱藏分類；
 │                 popup「查這家」連查詢頁）
@@ -492,6 +496,16 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   點名、語法錯行號斷言放寬（尾逗號訊息 Py3.10~3.13 行號不同）。
   測試 52→54（載入器防呆＋磚三變體：雙預算 45%、只設上限 120%、
   無設定無磚）
+- ✅ 年度回顧第五頁（2026-08-01，issue #13）：`out/year.html`——日曆年至今
+  的統計磚（總額/月均/非必要佔比/對獎戰績）＋亮點（單筆最大、最貴的一
+  天）＋分類佔比條（穩定色槽）＋店家排行前 10。`build_payload` 出
+  `payload.year`（Python 決定的事實由 Python 出，頁面只排版）；**年度＝
+  庫內最新發票的年份**不用牆上時鐘——一月還沒抓新資料不會出空回顧、
+  golden 不吃當下日期；同額並列取最早（invoice_rows 日期升冪 + max 取
+  首個）。儀表板 sub 加 📅 連結；五頁測試迴圈（PAGE_ROOTS）自動涵蓋
+  惡意字串/殘缺 payload；slot 錯開測試延伸到佔比條（inline 取色，DOM
+  快照拍不到）；golden 新增 year.txt。真實資料 13 分類/前 10 店家零
+  JS 錯誤。測試 54/54（新頁走既有測試面，無新測試函式）
 - ⬜ 緩辦（要做先問）：CSV 匯出（分類趨勢圖已做＝#11；地圖店家搜尋立案為 #15）
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>twcrawl 年度回顧</title>
+<script src="ui.js"></script>
+<link rel="stylesheet" href="ui.css">
+<style>
+  /* 文件版面與其他三頁逐字相同（ui.css 刻意留各頁的那組）；
+     .brow 分類佔比列是本頁專屬 */
+  body {
+    background: var(--page); color: var(--text-1);
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif;
+    font-size: 14px; line-height: 1.5; padding: 24px 16px 48px;
+  }
+  header { margin-bottom: 20px; position: relative; }
+  button.theme { position: absolute; top: 0; right: 0;
+                 border: 1px solid var(--border); background: var(--surface-1);
+                 color: var(--text-2); border-radius: 999px; padding: 3px 12px;
+                 cursor: pointer; font: inherit; font-size: 12px; }
+  h1 { font-size: 20px; font-weight: 650; }
+  .tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
+  a.map { color: var(--s1); text-decoration: none; font-size: 12px; }
+  a.map:hover { text-decoration: underline; }
+  td { border-bottom: 1px solid var(--grid); padding: 5px 10px 5px 0; }
+  .hl { font-size: 24px; font-weight: 600; margin: 2px 0; }
+  .brow { display: grid; grid-template-columns: 110px 1fr 170px; gap: 10px;
+          align-items: center; margin: 7px 0; font-size: 13px; }
+  .brow .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .brow .track { display: block; background: var(--grid);
+                 border-radius: 4px; height: 8px; }
+  .brow .fill { display: block; height: 8px; border-radius: 4px; }
+  .brow .val { color: var(--text-2); font-size: 12px; text-align: right;
+               font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="empty">
+  找不到資料（data.js）。<br><br>
+  最常見的原因：開到了 <code>src\twcrawl\web\year.html</code>（這是模板）。<br>
+  請開 <b><code>out\year.html</code></b>——<code>twcrawl export</code> 會把模板與
+  data.js 一起放在那裡。<br><br>
+  若開的已是 out\ 下的檔案，data.js 可能是還沒有年度區塊的舊版——
+  重跑 <code>twcrawl export</code> 即可。
+</div></div>
+<script src="data.js"></script>
+<script>
+TW.page({
+  needs: ["year", "categories"],
+  render(D, ui) {
+  const { nt, esc, el } = ui;
+  const app = document.getElementById("app");
+  const Y = D.year;
+  // 分類佔比走穩定色槽（issue #10）：slot 在 categories[]，年度列只帶
+  // 名字與金額，這裡查表取色——沒有槽的（含未分類）就是中性灰
+  const cats = ui.catColors(D.categories);
+  const pct = (part, whole) => whole > 0 ? Math.round(part / whole * 100) : 0;
+
+  const hd = el("header");
+  hd.innerHTML = `<h1>${esc(Y.year)} 年度回顧</h1><div class="sub">` +
+    "日曆年至今的全貌——12 月後重跑 twcrawl export 就是完整年度版　" +
+    '<a class="map" href="dashboard.html">📊 月報</a>　' +
+    '<a class="map" href="query.html">🔍 查詢頁</a></div>';
+  hd.append(ui.themeButton());
+  app.append(hd);
+
+  // ---- 年度統計磚 -------------------------------------------------------
+  const tiles = el("div", "tiles");
+  const lotLine = (Y.lottery.wins ? `🎉 ${Y.lottery.wins} 筆中獎・` : "") +
+    `參加 ${Y.lottery.invoices} 張`;
+  const defs = [
+    { label: `年度支出（${esc(Y.year)} 年）`, value: nt(Y.total),
+      extra: `<div class="delta">${Y.count} 張發票・${Y.months} 個月</div>` },
+    { label: "月均支出", value: nt(Y.monthlyAvg),
+      extra: `<div class="delta">以有資料的 ${Y.months} 個月平均</div>` },
+    { label: "非必要消費", value: nt(Y.unnecessary.total),
+      extra: `<div class="delta">${Y.unnecessary.count} 筆・佔全年 ${
+        pct(Y.unnecessary.total, Y.total)}%</div>` },
+    { label: "對獎戰績", value: Y.lottery.wins ? nt(Y.lottery.amount) : "未中獎",
+      extra: `<div class="delta">${lotLine}</div>` },
+  ];
+  for (const t of defs) {
+    const tile = el("div", "tile");
+    tile.append(el("div", "label", t.label), el("div", "value", t.value));
+    if (t.extra) tile.insertAdjacentHTML("beforeend", t.extra);
+    tiles.append(tile);
+  }
+  app.append(tiles);
+
+  // ---- 亮點：單筆最大 × 最貴的一天 --------------------------------------
+  const cols = el("div", "cols");
+  const mi = Y.maxInvoice, md = Y.maxDay;
+  const c1 = el("div", "card");
+  c1.append(el("h2", null, "單筆最大消費"));
+  c1.insertAdjacentHTML("beforeend",
+    `<div class="hl">${nt(mi.amount)}</div>` +
+    `<div class="note">${esc(mi.date)}・${esc(mi.seller)}・${esc(mi.category)}` +
+    `——<a class="map" href="query.html?q=${encodeURIComponent(mi.num)}">` +
+    "看這張發票</a></div>");
+  const c2 = el("div", "card");
+  c2.append(el("h2", null, "最貴的一天"));
+  c2.insertAdjacentHTML("beforeend",
+    `<div class="hl">${nt(md.total)}</div>` +
+    `<div class="note">${esc(md.date)}・${md.count} 張發票` +
+    `——<a class="map" href="query.html?q=${encodeURIComponent(md.date)}">` +
+    "看該日發票</a></div>");
+  cols.append(c1, c2);
+  app.append(cols);
+
+  // ---- 分類全年佔比（穩定色槽） -----------------------------------------
+  const cc = el("div", "card");
+  cc.append(el("h2", null, "分類全年佔比"),
+            el("div", "desc", "顏色與月報同一套色槽；點列到查詢頁篩選"));
+  const maxCat = Math.max(1, ...Y.byCategory.map(c => c.total));
+  for (const c of Y.byCategory) {
+    const row = el("div", "brow",
+      `<span class="name">${esc(c.name)}</span>` +
+      `<span class="track"><span class="fill" style="width:${
+        Math.max(c.total / maxCat * 100, 1)}%;background:${
+        cats.of(c.name)}"></span></span>` +
+      `<span class="val">${nt(c.total)}・${pct(c.total, Y.total)}%</span>`);
+    row.style.cursor = "pointer";
+    row.addEventListener("click", () => {
+      location.href = "query.html?cat=" + encodeURIComponent(c.name);
+    });
+    cc.append(row);
+  }
+  app.append(cc);
+
+  // ---- 店家排行 ---------------------------------------------------------
+  const sc = el("div", "card");
+  sc.append(el("h2", null, `店家排行（前 ${Y.sellers.length} 名）`),
+            el("div", "desc", "年度消費金額最高的店家；點「查這家」鑽取"));
+  const wrapT = el("div", "scrollx");
+  wrapT.innerHTML = "<table><tr><th>#</th><th>店家</th>" +
+    '<th class="num">金額</th><th class="num">筆數</th><th></th></tr>' +
+    Y.sellers.map((s, i) =>
+      `<tr><td>${i + 1}</td><td>${esc(s.name)}</td>` +
+      `<td class="num">${Math.round(s.total).toLocaleString("zh-TW")}</td>` +
+      `<td class="num">${s.count}</td>` +
+      `<td><a class="map" href="query.html?seller=${
+        encodeURIComponent(s.name)}">查這家</a></td></tr>`).join("") +
+    "</table>";
+  sc.append(wrapT);
+  app.append(sc);
+
+  app.append(el("div", "note",
+    `資料截至 ${D.generatedAt} 由 twcrawl export 產生・全部在本機、` +
+    "不自動外連、不上雲（docs/adr/0001）"));
+  },
+});
+</script>
+</body>
+</html>
