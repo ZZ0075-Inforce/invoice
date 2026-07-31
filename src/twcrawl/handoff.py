@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
+from . import capture_index
+
 INV_NUM_RE = re.compile(r"^[A-Z]{2}\d{8}$")
 DATE_RE = re.compile(r"^\d{4}[/\-.]?\d{1,2}[/\-.]?\d{1,2}$")
 ROC_DATE_RE = re.compile(r"^1\d{2}[/\-.]?\d{1,2}[/\-.]?\d{1,2}$")
@@ -147,29 +149,28 @@ def _maybe_csv(path: Path, indent: str = "    ") -> list[str]:
 
 def summarize(root: Path) -> str:
     """讀 captures/<name>/，回傳可直接分享的純文字摘要。"""
-    idx_path = root / "index.json"
+    idx_path = capture_index.path(root)
     if not idx_path.exists():
         raise SystemExit(f"{idx_path} 不存在——這個目錄不是 capture 產生的結果。")
-    entries = json.loads(idx_path.read_text(encoding="utf-8"))
+    entries = capture_index.read_entries(root)
 
     out = [
         f"擷取摘要：{root.name}",
         f"共 {len(entries)} 個項目。所有值已代換成型別名稱，可直接分享。",
     ]
     for e in entries:
-        seq = e.get("seq", "?")
-        url = _safe_url(e.get("url", ""))
-        if e.get("kind") == "download":
-            out.append(f"\n[{seq:>03}] 下載  {url}")
-            out.append(f"    {e.get('bytes', 0):,} bytes")
-            out += _maybe_csv(root / e.get("file", ""))
+        url = _safe_url(e.url)
+        if e.kind == "download":
+            out.append(f"\n[{e.seq:>03}] 下載  {url}")
+            out.append(f"    {e.bytes:,} bytes")
+            out += _maybe_csv(root / e.file)
             continue
 
-        out.append(f"\n[{seq:>03}] {e.get('method', '?')} {e.get('status', '?')}  {url}")
-        out.append(f"    content-type: {e.get('content_type', '?')}，{e.get('bytes', 0):,} bytes")
-        if e.get("request_post_data"):
-            out.append(f"    POST 參數: {_safe_post(e['request_post_data'])}")
-        f = root / e.get("file", "")
+        out.append(f"\n[{e.seq:>03}] {e.method or '?'} {e.status or '?'}  {url}")
+        out.append(f"    content-type: {e.content_type or '?'}，{e.bytes:,} bytes")
+        if e.post_data:
+            out.append(f"    POST 參數: {_safe_post(e.post_data)}")
+        f = root / e.file
         if f.suffix == ".json" and f.exists():
             try:
                 shape = _shape(json.loads(f.read_text(encoding="utf-8", errors="replace")))

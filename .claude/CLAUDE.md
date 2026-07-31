@@ -16,7 +16,7 @@ FDA 目前接三個來源：中聯油脂案專區強制下架清單（edible_oil
 ```
 pip install -e .                      # 一律 editable；PyPI 上的 twcrawl 是無關的舊套件
 python -m playwright install chromium # playwright 指令找不到時用這個
-python tests/test_twcrawl.py          # 測試（45/45，不用 pytest）
+python tests/test_twcrawl.py          # 測試（47/47，不用 pytest）
 python tests/test_twcrawl.py --update-golden   # 有意改動四頁畫面後重生 tests/golden/
 
 # 每月例行（一鍵；fetch 區間自動推算、FDA 回溯 90 天只給 feed 型來源）
@@ -89,7 +89,15 @@ src/twcrawl/
 ├── browser.py    Playwright session、wait_for_operator（pump！、中止拋
 │                 KeyboardInterrupt 好與「步驟失敗」分辨）、storage_state；
 │                 session 以檔案路徑傳入，這個模組不知道工作區在哪
-├── netcapture.py 攔截 XHR/下載 → captures/（隨錄隨寫 index.json）
+├── capture_index.py  `captures/<目錄>/index.json` 的單一定義：Entry（NamedTuple）
+│                 ＋ Index（seq、隨錄隨寫 flush、路徑相對化）＋ 容錯讀取。
+│                 兩個寫入端（netcapture 錄真實瀏覽、einvoice_fetch 重放 API）
+│                 與兩個讀取端（ingest 對檔、handoff 印摘要）都經過它。
+│                 **JSON 欄位名不可更動**——captures/ 是重新解析的來源，明細
+│                 只保存近半年，寫出不相容的索引等於把舊擷取變成廢紙
+│                 （test_capture_index_is_backward_compatible 把關）。
+│                 這個模組不 import 其他 twcrawl 模組、不碰 Playwright
+├── netcapture.py 攔截 XHR/下載 → captures/（索引交給 capture_index）
 ├── tables.py     通用表格擷取 + 分頁（含截斷警告）
 ├── db.py         SQLite schema 與 upsert（全部冪等，重跑安全）。讀取面**只收
 │                 不只一個 caller 要的**：`invoices()`／`invoice_items()` 吃同一組
@@ -188,10 +196,14 @@ src/twcrawl/
 │                 圓點色=分類、大小=金額；時間區間篩選＋圖例點選隱藏分類；
 │                 popup「查這家」連查詢頁）
 ├── probe.py      頁面結構偵察
-├── handoff.py    去值化摘要（URL query、POST 參數、JSON、CSV 全遮值；token 連「參數名」都遮）
+├── handoff.py    去值化摘要（URL query、POST 參數、JSON、CSV 全遮值；token 連「參數名」都遮；
+│                 索引從 capture_index 讀——以前對 fetch 產物會把檔名字根印在端點欄位）
 └── sites/
     ├── einvoice.py        ALIASES 欄位別名（2026-07-27 已依實測校正）、CSV/JSON/明細解析、ingest
-    ├── einvoice_fetch.py  fetch 逐月重放 API（呼叫走頁內 fetch()，token 即取即用不落地）
+    ├── einvoice_fetch.py  fetch 逐月重放 API（呼叫走頁內 fetch()，token 即取即用不落地；
+    │                      _Sink 寫索引帶**真實 url 與 status**，回傳鍵是
+    │                      fetched_invoices／fetched_details——以前叫 invoices，
+    │                      被 ingest 回傳的 **res 靜靜蓋掉）
     └── fda.py             三來源下架/回收/警訊清單（?idx= 分頁優先，點擊後備）。
                            SOURCE_META 帶顯示名與事件/監測型態——抓取端靠它決定
                            since 適不適用、食安頁靠它分頁。**since 只給 feed 型
@@ -395,6 +407,18 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   ——舊碼在該路徑沒有 `order by`，拿到的是 SQLite 儲存順序（未定義行為），
   新碼一律日期升冪，已加測試釘住。順帶補上 COALESCE 不變式的測試（拿掉
   COALESCE 會紅，訊息是人話）。測試 45/45
+- ✅ 擷取索引模組（2026-08-01，架構檢視 candidate 6）：`captures/<目錄>/index.json`
+  的形狀本來是兩份手寫 dict literal，已經漂了——`_Sink` 硬寫 `status=200`、把
+  合成標籤放進 `url`，於是 `handoff` 對 fetch 產物把檔名字根印在端點欄位。
+  關鍵發現：**那不是「它不知道」**，真實的 url 與 status 就在呼叫點的 scope 裡，
+  只是沒被傳進去。收進 `capture_index`（Entry／Index／read_entries／by_file），
+  兩個寫入端與兩個讀取端都經過它。**JSON 欄位名一個字都沒動**——captures/ 是
+  重新解析的來源、明細只保存近半年，寫出不相容的索引等於把舊擷取變成廢紙；
+  相容性有測試把關（舊格式含下載項缺欄位、Windows 反斜線、壞檔），並實地用
+  `twcrawl handoff` 對真實的 57 項舊目錄跑通。順帶修掉附錄缺陷 #7（`fetch_range`
+  回傳 `{"invoices": total_inv, **res}`，`res` 也有 `invoices`，把抓取數靜靜蓋成
+  入庫數）與一個死 import。`_Sink` 從「純檔案系統程式碼卻無從測起」變成有測試。
+  測試 45→47
 - ⬜ 緩辦（要做先問）：CSV 匯出、分類趨勢圖、地圖店家搜尋
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

@@ -499,6 +499,101 @@ def test_handoff_sanitizes_values():
     print("✓ handoff 摘要：欄位名保留、所有值已遮蔽")
 
 
+def test_capture_index_is_backward_compatible():
+    """既有 captures/ 目錄必須照樣讀得動，新寫出的檔也要與舊格式相同。
+
+    這是硬約束，不是「最好有」：captures/ 是重新解析的來源，而明細只保存
+    近半年——寫出不相容的索引等於把舊擷取變成廢紙，重抓也抓不回來。
+    """
+    from twcrawl import capture_index
+
+    # 兩個舊寫入端各自產出的形狀，逐字照抄（含下載項缺 method/status、
+    # Windows 的反斜線路徑、_Sink 硬寫的 status 200）
+    old = [
+        {"seq": 1, "kind": "response",
+         "url": "https://example.test/api/list?token=SECRET",
+         "method": "POST", "status": 200, "content_type": "application/json",
+         "bytes": 12, "file": "responses\\001_list.json",
+         "request_post_data": '{"page":1}'},
+        {"seq": 2, "kind": "download", "url": "https://example.test/x.csv",
+         "file": "downloads/x.csv", "bytes": 34},
+    ]
+    with TemporaryDirectory() as td:
+        root = Path(td)
+        capture_index.path(root).write_text(
+            json.dumps(old, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        got = capture_index.read_entries(root)
+        assert [e.seq for e in got] == [1, 2]
+        assert got[0].file == "responses/001_list.json", "反斜線要正規化"
+        assert got[0].status == 200 and got[0].post_data == '{"page":1}'
+        # 下載項沒有 method/status，不該 KeyError，也不該假裝有值
+        assert got[1].kind == "download" and got[1].method == ""
+        assert got[1].status is None and got[1].bytes == 34
+        assert capture_index.by_file(root)["downloads/x.csv"].url.endswith("x.csv")
+
+        # 壞掉的索引回空清單（呼叫端本來就靠掃目錄取檔，索引是補充）
+        capture_index.path(root).write_text("{ 這不是 JSON", encoding="utf-8")
+        assert capture_index.read_entries(root) == []
+        capture_index.path(root).unlink()
+        assert capture_index.read_entries(root) == []
+
+    # 反向：用 Index 寫出來的，要與舊格式逐位元組相同
+    with TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "responses").mkdir()
+        (root / "downloads").mkdir()
+        idx = capture_index.Index(root)
+        assert idx.next_seq == 1, "檔名要帶序號，所以寫檔前得問得到"
+        idx.response(url="https://example.test/api/list?token=SECRET",
+                     method="POST", status=200,
+                     content_type="application/json", size=12,
+                     file="responses/001_list.json", post_data='{"page":1}')
+        assert idx.next_seq == 2, "加一項就要往前走"
+        idx.download(url="https://example.test/x.csv",
+                     file=root / "downloads" / "x.csv", size=34)
+        written = json.loads(capture_index.path(root).read_text(encoding="utf-8"))
+        want = [dict(old[0], file="responses/001_list.json"), old[1]]
+        assert written == want, f"寫出的形狀與舊格式不同：\n{written}\n{want}"
+    print("✓ 擷取索引：舊目錄讀得動、寫出的形狀與舊格式相同、壞檔不炸")
+
+
+def test_fetch_sink_records_real_url_and_status():
+    """fetch 寫出的索引要帶真實端點與狀態碼，不是檔名字根與硬寫的 200。
+
+    以前 handoff 對 fetch 產物會把 `searchCarrierInvoice_202607_p0` 印在
+    「端點」的位置——而那不是因為 _Sink 不知道，真實的 url 與 status 就在
+    呼叫點的 scope 裡，只是沒被傳進去。
+    """
+    from twcrawl import capture_index, handoff
+    from twcrawl.sites.einvoice_fetch import _Sink
+
+    with TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "responses").mkdir()
+        sink = _Sink(root)
+        sink.add("searchCarrierInvoice_202607_p0", '{"content":[]}',
+                 url="https://service-mc.example.test/btc502w/searchCarrierInvoice?page=0",
+                 status=200)
+        sink.add("getCarrierInvoiceDetail_202607", '{"details":[]}',
+                 url="https://service-mc.example.test/common/getCarrierInvoiceDetail",
+                 status=500, post="eyJhbGciOiJIUzI1NiJ9.x.y")
+
+        e = capture_index.read_entries(root)
+        assert [x.seq for x in e] == [1, 2]
+        assert e[0].url.endswith("searchCarrierInvoice?page=0"), e[0].url
+        assert e[1].status == 500, "實際狀態碼要留著，不是一律 200"
+        assert e[1].post_data.startswith("eyJ"), "明細的 JWT 是發票號碼的來源"
+        assert e[0].file == "responses/001_searchCarrierInvoice_202607_p0.json"
+
+        text = handoff.summarize(root)
+        assert "service-mc.example.test/btc502w/searchCarrierInvoice" in text, \
+            "摘要的端點欄位要是真的端點"
+        assert "?page=<str(數值)>" in text, "query 的值仍要遮蔽"
+        assert "eyJhbGciOiJIUzI1NiJ9" not in text, "token 不得出現在摘要裡"
+    print("✓ fetch 索引：端點與狀態碼是真的、JWT 仍被摘要遮蔽")
+
+
 def test_fetch_month_range_and_utc_bounds():
     """逐月抓取的月份展開與台北→UTC 邊界（平台的日期參數固定 24 字元）。"""
     from twcrawl.sites import einvoice_fetch as ef

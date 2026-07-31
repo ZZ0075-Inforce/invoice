@@ -6,13 +6,13 @@ SPA 的資料一定經由 XHR/fetch 回傳，攔截網路回應比解析 DOM 穩
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from playwright.sync_api import BrowserContext, Download, Response
+
+from .capture_index import Index
 
 # 值得留下來的回應類型
 INTERESTING_CT = re.compile(
@@ -39,8 +39,10 @@ class Capture:
     """
 
     root: Path
-    seq: int = field(default=0, init=False)
-    index: list[dict[str, Any]] = field(default_factory=list, init=False)
+    index: Index = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.index = Index(self.root)
 
     # -- 掛載 ----------------------------------------------------------------
     def attach(self, ctx: BrowserContext) -> None:
@@ -71,32 +73,23 @@ class Capture:
         if not body:
             return
 
-        self.seq += 1
-        stem = f"{self.seq:03d}_{_safe(url.split('?')[0].rsplit('/', 1)[-1])}"
+        stem = f"{self.index.next_seq:03d}_{_safe(url.split('?')[0].rsplit('/', 1)[-1])}"
         sniff = body.lstrip()[:1]
         ext = ".json" if ("json" in ct.lower() or sniff in (b"{", b"[")) else ".bin"
         path = self.root / "responses" / f"{stem}{ext}"
         path.write_bytes(body)
 
-        entry = {
-            "seq": self.seq,
-            "kind": "response",
-            "url": url,
-            "method": resp.request.method,
-            "status": resp.status,
-            "content_type": ct,
-            "bytes": len(body),
-            "file": str(path.relative_to(self.root)),
-        }
         # 順手記下 POST body，之後要改成全自動時就知道要送什麼參數
+        post = ""
         try:
             if resp.request.method == "POST":
-                entry["request_post_data"] = (resp.request.post_data or "")[:2000]
+                post = (resp.request.post_data or "")[:2000]
         except Exception:
             pass
 
-        self.index.append(entry)
-        self._flush()  # 隨錄隨寫：中途 Ctrl+C 或當機也不會丟索引
+        self.index.response(url=url, method=resp.request.method,
+                            status=resp.status, content_type=ct,
+                            size=len(body), file=path, post_data=post)
         print(
             f"  [捕獲] {resp.request.method} {resp.status} {len(body):>7,}B  {url[:96]}",
             flush=True,
@@ -109,25 +102,11 @@ class Capture:
         except Exception as e:  # 下載可能被使用者取消
             print(f"  [下載失敗] {e}")
             return
-        self.seq += 1
-        self.index.append(
-            {
-                "seq": self.seq,
-                "kind": "download",
-                "url": dl.url,
-                "file": str(target.relative_to(self.root)),
-                "bytes": target.stat().st_size,
-            }
-        )
-        self._flush()
+        self.index.download(url=dl.url, file=target,
+                            size=target.stat().st_size)
         print(f"  [下載] {target.name} ({target.stat().st_size:,}B)", flush=True)
 
     # -- 收尾 ----------------------------------------------------------------
-    def _flush(self) -> None:
-        (self.root / "index.json").write_text(
-            json.dumps(self.index, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-
     def finish(self) -> Path:
-        self._flush()
+        self.index.flush()
         return self.root
