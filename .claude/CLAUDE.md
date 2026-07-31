@@ -353,11 +353,23 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   （`var()` 與 JS 的 `getPropertyValue`）都沒人用，才收下。
   `export.write_export` 改複製整個 `web/`，`template=` 參數（無人使用、名字
   說謊）改名 `web_dir`。測試 45/45、42 秒
-- ⬜ 步驟 3（已 grilling 定案）衍生歸一：界線是「誰決定它」——Python 出 `periodLabel`／`ruleText`
-  （門檻改了文案跟著改），ui.js 算篩選後的月分桶與 rollup、格式與顏色；payload
-  拿掉 `unnecessary[]`／`fda.match`／`lottery.uncovered`＋`months`＋`claimStart`。
-  **三份 seller rollup 不要收斂**——它們是三個不同的問題，且地圖那份的期間是
-  互動參數，必然在客戶端（架構報告原本寫成「重複」，是誤判）
+- ✅ 衍生歸一（2026-08-01，candidate 4 步驟 3／3；會動輸出）：界線是**誰決定它**
+  ——被 Python 實作細節決定的事實由 Python 出，被使用者互動決定的分組留 JS。
+  `_detect_fixed` 的門檻收成具名的 `FIXED_RULE`（minCount／tolAbs／tolPct／
+  minDays／maxDays／staleFactor），期別標籤在 Python 算完（`fixed[].periodLabel`），
+  門檻數字隨 `fixedRule` 進 payload 給查詢頁組文案——改門檻文案自動跟著改，
+  而 query.html 那份重述門檻的對照表（最後一支「約 N 天」因為 Python 已濾掉
+  med>400 而永遠不可達）整個消失。payload 拿掉 `unnecessary[]`（判準是
+  `categories[].unnecessary` 旗標，頁面篩 invoices 即可；以前兩種編碼並存、
+  月報用清單查詢頁用旗標）、`fda.match`（可從 matches 導出，而且它的 `{}` 在
+  JS 是 truthy，會讓「有報告零命中」的磚從「—」翻成「0 筆」）、`lottery.uncovered`／
+  `periods[].months`／`claimStart`（無人讀）。`ui.js` 收下 `unnecessaryCats`／
+  `monthTotals`（查詢頁兩處逐字相同）／`monthBounds`（`-31` 上界的字串比較慣例
+  原本散在兩頁）。**三份 seller rollup 刻意不收斂**——它們是三個不同的問題，
+  且地圖那份的期間是互動參數，必然在客戶端（架構報告原本寫成「重複」，是誤判）。
+  六份 golden 的畫面差異合計**只有一行**（固定支出說明多了實際門檻數字）。
+  CONTEXT.md 的店家分類詞條同步改準：分析的分組單位是**發票的分類**不是店家
+  ——品項覆寫上線後就不成立了，而同文件的非必要消費詞條早就寫對。測試 45/45
 - ⬜ 緩辦（要做先問）：CSV 匯出、分類趨勢圖、地圖店家搜尋
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

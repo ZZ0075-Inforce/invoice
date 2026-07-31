@@ -111,7 +111,9 @@ TW.page({
   // ---- 總覽 -------------------------------------------------------------
   function overview() {
     const total = MATCHES.length;
-    const byLevel = F.match || {};
+    // 層級直方圖從 matches 導出——payload 不另帶一份（兩種編碼會打架）
+    const byLevel = {};
+    for (const m of MATCHES) byLevel[m.level] = (byLevel[m.level] || 0) + 1;
     const levelStr = Object.entries(byLevel)
       .map(([k, v]) => `${k} ${v}`).join("・") || "—";
     const lastSeen = SRC.map(s => s.lastSeen).filter(Boolean).sort().slice(-1)[0];
