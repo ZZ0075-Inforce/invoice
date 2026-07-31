@@ -134,7 +134,9 @@ src/twcrawl/
 ├── bizreg.py     財政部 BGMOPEN1 稅籍登記（66MB zip 串流過濾，只留自己的統編入
 │                 biz_registry；欄位以關鍵字定位；Py3.13 需關 VERIFY_X509_STRICT——
 │                 政府憑證缺 SKI）
-├── export.py     四頁衍生（out/data.js＋複製模板；file:// 不能 fetch JSON 所以走 script src；
+├── export.py     四頁衍生（out/data.js＋**複製整個 web/ 目錄**——ui.js 是四頁的必要
+│                 相依，逐檔明列時漏一個會從「少一頁」變成「四頁都壞但看起來像沒
+│                 資料」；file:// 不能 fetch JSON 所以走 script src；
 │                 店家附行業/地址/常買品項 top3；發票列含品項全欄位與發票號碼——
 │                 載具號碼、raw 永不進 data.js，ADR-0002；fda.sources 歸戶：match
 │                 報告的 source 欄是 source_url，反查 SOURCES 得名稱，FDA_SOURCE_META
@@ -147,6 +149,19 @@ src/twcrawl/
 ├── geocode.py    地址→座標：NLSC TextQueryMap 門牌級為主（**要帶 maps.nlsc.gov.tw
 │                 的 Referer** 否則 PERMISSION DENIED）、Nominatim 路段級後備（台灣
 │                 門牌會 MISS）；稅籍地址須清洗（全形、里鄰、截到「號」）
+├── web/ui.js     四頁共用骨架。核心是 `TW.page({needs, ready, clear, render})`：
+│                 主題套用（在 <head> 同步跑，否則先亮後暗閃一下）、payload 讀取與
+│                 完整性判斷（needs 的鍵要存在，陣列還要非空）、**錯誤圍堵**——沒有
+│                 這層的話 render 中途 throw 會留下已清空的容器，畫面與「找不到
+│                 data.js」無法區分。順帶帶進 esc/nt/css/el/themeButton/catColors。
+│                 **是全域 TW 不是 ES module**：file:// 下 import 走 CORS 會被擋，
+│                 與 data.js 不走 fetch 同一個理由（ADR-0002）。別「現代化」
+├── web/ui.css    四頁共用色票與文件版面。只收「在有定義的頁逐字相同、且沒定義的
+│                 頁不受影響」的規則。「不受影響」要查兩條路徑：CSS 的 var(--x) 與
+│                 **JS 的 getComputedStyle().getPropertyValue("--x")**（地圖的分類色
+│                 就是後者取的），只查 var() 會漏。刻意留各頁：--warning（dashboard
+│                 與 fda 值不一致）、--serious（只有 dashboard 且沒人用）、--event
+│                 （只有食安頁用）、body/button.theme/h1（地圖是全視窗版面）
 ├── web/dashboard.html  月報模板（零相依 SVG 圖表、hover tooltip、亮暗切換鈕
 │                 localStorage twcrawl-theme 三頁共用；FDA 命中明細卡；非必要表
 │                 只列近 10 筆其餘導查詢頁；調色盤 6 色槽過 dataviz 驗證器兩模式）
@@ -328,12 +343,17 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   實測注入 9 個節點；`lot.next.drawDate` 無防護——null 會在 `app.innerHTML=""`
   之後 throw，畫面與「找不到 data.js」一模一樣。兩個修正都經「還原後測試必須
   變紅」驗證過。測試 42→45（Chromium 啟動 7→9）
-- ⬜ 步驟 2／3（已 grilling 定案，見下）：抽 `ui.js`（核心是 `TW.page({needs,
-  render})`：theme、payload 判斷、**錯誤圍堵**、nav；`esc`/`nt`/`el`/`catColor`
-  順帶）＋ `ui.css`（只搬逐字相同的：色票與 88 行共同版面；`#savebar button`、
-  `--warning` 這些已分歧的留原地，才維持行為零差異）。兩者走 `<script src>`／
-  `<link>`，**不可改 ES module**（file:// 下 `import` 被 CORS 擋，與 data.js 同因）。
-  步驟 3 衍生歸一：界線是「誰決定它」——Python 出 `periodLabel`／`ruleText`
+- ✅ 抽 ui.js／ui.css（2026-08-01，candidate 4 步驟 2／3；行為零差異，快照把關）：
+  四頁 2,168→1,886 行，共用 192 行。**過程中推翻了報告的前提**——「88 行逐字
+  相同」是 dashboard↔query 的兩頁數字；四頁的規則層級交集只有 3 條（map 是全
+  視窗 flex 版面，body/h1/header 全不同）。改以**宣告層級**抽色票才有價值。
+  也因此先補了樣式探針：DOM 快照抓不到 CSS 迴歸，`@tokens`＋18 選擇器×10 屬性
+  ×三種主題模式進 golden，抽離後只有 fda／map 的 `@tokens` 行變動（多了原本
+  未定義的 token），`@style` 與 DOM 零變動。那些 token 逐一驗過**兩條引用路徑**
+  （`var()` 與 JS 的 `getPropertyValue`）都沒人用，才收下。
+  `export.write_export` 改複製整個 `web/`，`template=` 參數（無人使用、名字
+  說謊）改名 `web_dir`。測試 45/45、42 秒
+- ⬜ 步驟 3（已 grilling 定案）衍生歸一：界線是「誰決定它」——Python 出 `periodLabel`／`ruleText`
   （門檻改了文案跟著改），ui.js 算篩選後的月分桶與 rollup、格式與顏色；payload
   拿掉 `unnecessary[]`／`fda.match`／`lottery.uncovered`＋`months`＋`claimStart`。
   **三份 seller rollup 不要收斂**——它們是三個不同的問題，且地圖那份的期間是

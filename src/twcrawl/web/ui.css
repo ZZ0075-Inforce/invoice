@@ -1,0 +1,91 @@
+/* twcrawl 四頁共用樣式——色票與文件版面。
+
+   只收「在有定義的頁逐字相同、且沒定義的頁不受影響」的規則，所以
+   搬進來不改變任何一頁的畫面（tests/golden 的 @tokens／@style 探
+   針把關）。
+
+   「不受影響」要查兩條路徑，不是一條：CSS 的 var(--x)，以及 JS 的
+   getComputedStyle().getPropertyValue("--x")——地圖的分類色就是後者
+   取的（SLOTS 陣列）。只查 var() 會漏。
+
+   刻意留在各頁的：
+     --warning  dashboard 與 fda 的值不一致（dashboard 那份沒人用）
+     --serious  只有 dashboard 定義，且沒人用
+     --event    只有食安頁在用
+     body / button.theme / h1  地圖是全視窗版面，值本來就不同
+*/
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface-1: #fcfcfb;
+  --text-1: #0b0b0b;
+  --text-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --baseline: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --up-good: #006300;
+  --s1: #2a78d6;
+  --s2: #eb6834;
+  --s3: #1baf7a;
+  --s4: #eda100;
+  --s5: #e87ba4;
+  --s6: #008300;
+  --other: #898781;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface-1: #1a1a19;
+    --text-1: #ffffff;
+    --text-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255,255,255,0.10);
+    --up-good: #0ca30c;
+    --s1: #3987e5;
+    --s2: #d95926;
+    --s3: #199e70;
+    --s4: #c98500;
+    --s5: #d55181;
+    --s6: #008300;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d;
+  --surface-1: #1a1a19;
+  --text-1: #ffffff;
+  --text-2: #c3c2b7;
+  --muted: #898781;
+  --grid: #2c2c2a;
+  --baseline: #383835;
+  --border: rgba(255,255,255,0.10);
+  --up-good: #0ca30c;
+  --s1: #3987e5;
+  --s2: #d95926;
+  --s3: #199e70;
+  --s4: #c98500;
+  --s5: #d55181;
+  --s6: #008300;
+}
+
+* { box-sizing: border-box; margin: 0; }
+.wrap { max-width: 1060px; margin: 0 auto; }
+.sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.tile .label { color: var(--text-2); font-size: 12.5px; }
+.tile .delta { font-size: 12px; margin-top: 2px; color: var(--text-2); }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin-bottom: 16px; }
+.desc { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+.note { color: var(--muted); font-size: 12px; margin-top: 10px; }
+.scrollx { overflow-x: auto; }
+.empty { padding: 40px; text-align: center; color: var(--text-2); }
+code { background: var(--grid); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+h2 { font-size: 14.5px; font-weight: 650; margin-bottom: 2px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; border-bottom: 1px solid var(--grid); padding: 4px 10px 4px 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }

@@ -4,84 +4,30 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>twcrawl 消費儀表板</title>
-<script>(function () {
-  var t = localStorage.getItem("twcrawl-theme");
-  if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
-})();</script>
+<script src="ui.js"></script>
+<link rel="stylesheet" href="ui.css">
 <style>
+  /* 共用色票在 ui.css；這兩個只有本頁定義，且目前沒有規則引用 */
   :root {
-    color-scheme: light;
-    --page:        #f9f9f7;
-    --surface-1:   #fcfcfb;
-    --text-1:      #0b0b0b;
-    --text-2:      #52514e;
-    --muted:       #898781;
-    --grid:        #e1e0d9;
-    --baseline:    #c3c2b7;
-    --border:      rgba(11,11,11,0.10);
-    --up-good:     #006300;
-    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;
-    --s4: #eda100; --s5: #e87ba4; --s6: #008300;
-    --other: #898781;
-    --warning: #fab219; --serious: #ec835a;
+    --warning: #fab219;
+    --serious: #ec835a;
   }
-  @media (prefers-color-scheme: dark) {
-    :root:where(:not([data-theme="light"])) {
-      color-scheme: dark;
-      --page:      #0d0d0d;
-      --surface-1: #1a1a19;
-      --text-1:    #ffffff;
-      --text-2:    #c3c2b7;
-      --muted:     #898781;
-      --grid:      #2c2c2a;
-      --baseline:  #383835;
-      --border:    rgba(255,255,255,0.10);
-      --up-good:   #0ca30c;
-      --s1: #3987e5; --s2: #d95926; --s3: #199e70;
-      --s4: #c98500; --s5: #d55181; --s6: #008300;
-    }
-  }
-  :root[data-theme="dark"] {
-    color-scheme: dark;
-    --page:      #0d0d0d;
-    --surface-1: #1a1a19;
-    --text-1:    #ffffff;
-    --text-2:    #c3c2b7;
-    --muted:     #898781;
-    --grid:      #2c2c2a;
-    --baseline:  #383835;
-    --border:    rgba(255,255,255,0.10);
-    --up-good:   #0ca30c;
-    --s1: #3987e5; --s2: #d95926; --s3: #199e70;
-    --s4: #c98500; --s5: #d55181; --s6: #008300;
-  }
-  * { box-sizing: border-box; margin: 0; }
+
   body {
     background: var(--page); color: var(--text-1);
     font-family: system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif;
     font-size: 14px; line-height: 1.5; padding: 24px 16px 48px;
   }
-  .wrap { max-width: 1060px; margin: 0 auto; }
+
   header { margin-bottom: 20px; position: relative; }
   button.theme { position: absolute; top: 0; right: 0;
                  border: 1px solid var(--border); background: var(--surface-1);
                  color: var(--text-2); border-radius: 999px; padding: 3px 12px;
                  cursor: pointer; font: inherit; font-size: 12px; }
   h1 { font-size: 20px; font-weight: 650; }
-  .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
-  h2 { font-size: 14.5px; font-weight: 650; margin-bottom: 2px; }
-  .desc { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
-  .card {
-    background: var(--surface-1); border: 1px solid var(--border);
-    border-radius: 10px; padding: 16px 18px; margin-bottom: 16px;
-  }
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-           gap: 12px; margin-bottom: 16px; }
-  .tile { background: var(--surface-1); border: 1px solid var(--border);
-          border-radius: 10px; padding: 14px 16px; }
-  .tile .label { color: var(--text-2); font-size: 12.5px; }
+
   .tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
-  .tile .delta { font-size: 12px; margin-top: 2px; color: var(--text-2); }
+
   .tile .delta.good { color: var(--up-good); }
   .tile .delta.bad  { color: #d03b3b; }
   .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -96,12 +42,9 @@
   .swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
   svg { display: block; width: 100%; height: auto; }
   svg text { font-family: inherit; }
-  .scrollx { overflow-x: auto; }
-  table { border-collapse: collapse; width: 100%; font-size: 13px; }
-  th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px;
-       border-bottom: 1px solid var(--grid); padding: 4px 10px 4px 0; }
+
   td { border-bottom: 1px solid var(--grid); padding: 5px 10px 5px 0; }
-  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
   #tooltip {
     position: fixed; pointer-events: none; z-index: 10; display: none;
     background: var(--surface-1); color: var(--text-1);
@@ -114,9 +57,7 @@
   #tooltip .tt-row .v { font-variant-numeric: tabular-nums; }
   a.map { color: var(--s1); text-decoration: none; font-size: 12px; }
   a.map:hover { text-decoration: underline; }
-  .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
-  .empty { padding: 40px; text-align: center; color: var(--text-2); }
-  code { background: var(--grid); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+
   details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 8px; }
   .catin { border: 1px solid var(--border); background: var(--surface-1);
            color: var(--text-1); border-radius: 6px; padding: 2px 6px;
@@ -147,22 +88,14 @@
 <div id="tooltip"></div>
 <script src="data.js"></script>
 <script>
-(function () {
-  const D = window.TWCRAWL_DATA;
-  if (!D || !D.months || !D.months.length) return;
-
+TW.page({
+  needs: ["months"],
+  render(D, ui) {
+  const { css, nt, esc, el } = ui;
+  const SLOTS = ui.SLOTS;
   const app = document.getElementById("app");
-  app.innerHTML = "";
-  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-  const SLOTS = ["--s1","--s2","--s3","--s4","--s5","--s6"];
   const OTHER = "其他（含未分類）";
-
-  const nt = x => "NT$" + Math.round(x).toLocaleString("zh-TW");
   const compact = x => x >= 10000 ? "NT$" + (x/10000).toFixed(1) + " 萬" : nt(x);
-  // 店家名／分類名／稅籍行業都是使用者資料，一律經 esc 再進 innerHTML
-  // （另外三頁本來就有這支，這頁以前沒有）
-  const esc = s => String(s).replace(/[&<>"]/g,
-    ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]));
   // 地圖連結：使用者點擊才離開頁面（頁面本身不自動外連，見 docs/adr/0001）
   // 有稅籍地址就一併帶上，搜尋準得多
   const mapsUrl = (name, addr) => "https://www.google.com/maps/search/?api=1&query=" +
@@ -171,12 +104,6 @@
       .replace(/\s+/g, " ").trim() + (addr ? " " + addr : "")));
   const mapA = (name, addr) =>
     `<a class="map" href="${mapsUrl(name, addr)}" target="_blank" rel="noopener">地圖</a>`;
-  const el = (tag, cls, html) => {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (html !== undefined) e.innerHTML = html;
-    return e;
-  };
   const svgEl = (tag, attrs) => {
     const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
     for (const k in attrs) e.setAttribute(k, attrs[k]);
@@ -231,7 +158,7 @@
 
   // ---- 資料整形 ---------------------------------------------------------
   // 月度堆疊：全期金額前 6 大分類各佔一個色槽，其餘（含未分類）合併為中性灰
-  const topCats = D.categories.filter(c => c.name !== "未分類").slice(0, 6).map(c => c.name);
+  const topCats = ui.catColors(D.categories).top;
   const series = topCats.concat([OTHER]);
   const color = i => i < topCats.length ? css(SLOTS[i]) : css("--other");
   const months = D.months.map(m => {
@@ -313,19 +240,7 @@
     `<span>發票到 ${lastInvDate}</span>` +
     (staleDays > 14 ? `<span style="color:#d03b3b">　⚠ 已 ${staleDays} 天` +
       "沒有新發票——記得跑 twcrawl update</span>" : "") + "</div>";
-  // 亮暗切換：自動→亮→暗，寫 localStorage；圖表顏色在繪製時取樣，重載最單純
-  const THEMES = [["", "🌗 自動"], ["light", "☀️ 亮"], ["dark", "🌙 暗"]];
-  const curTheme = document.documentElement.dataset.theme || "";
-  const tb = el("button", "theme", THEMES.find(x => x[0] === curTheme)[1]);
-  tb.title = "亮暗主題（自動→亮→暗）";
-  tb.addEventListener("click", () => {
-    const next = THEMES[(THEMES.findIndex(x => x[0] === curTheme) + 1)
-      % THEMES.length][0];
-    if (next) localStorage.setItem("twcrawl-theme", next);
-    else localStorage.removeItem("twcrawl-theme");
-    location.reload();
-  });
-  hd.append(tb);
+  hd.append(ui.themeButton());
   app.append(hd, tiles);
 
   // ---- 中獎發票（有中才出現；時效資訊，排最前） -------------------------
@@ -782,7 +697,8 @@
     return `M${x},${y} L${x + w - r},${y} Q${x + w},${y} ${x + w},${y + r}` +
            ` L${x + w},${y + h - r} Q${x + w},${y + h} ${x + w - r},${y + h} L${x},${y + h} Z`;
   }
-})();
+  },
+});
 </script>
 </body>
 </html>

@@ -19,7 +19,8 @@ from . import db
 from .categories import Classifier, UNCATEGORIZED
 from .workspace import Workspace
 
-TEMPLATE = Path(__file__).parent / "web" / "dashboard.html"
+# 四頁模板與共用資產（ui.css）的來源目錄；package-relative，不隨工作區走
+WEB_DIR = Path(__file__).parent / "web"
 
 # 食安頁的來源標示（顯示名與事件／監測型態）住在 sites/fda.py 的 SOURCE_META
 # ——抓取端要靠型態決定 since 適不適用，呈現端要靠它分頁，同一份知識兩邊都要。
@@ -283,7 +284,7 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
 
 
 def write_export(conn, ws: Workspace, classifier: Classifier,
-                 template: Path = TEMPLATE) -> Path:
+                 web_dir: Path = WEB_DIR) -> Path:
     out_dir = ws.ensure_out()
     payload = build_payload(conn, ws, classifier)
     data_js = out_dir / "data.js"
@@ -293,16 +294,16 @@ def write_export(conn, ws: Workspace, classifier: Classifier,
         + ";\n",
         encoding="utf-8",
     )
+    # 整個 web/ 一起複製，而不是逐檔明列：ui.css 是四頁的必要相依，漏掉一個
+    # 檔案的後果從「少一頁」變成「四頁都壞但看起來像沒資料」。少列一個檔案
+    # 不該是靜默的失敗模式
+    for src in sorted(web_dir.rglob("*")):
+        if src.is_dir():
+            continue
+        dest = out_dir / src.relative_to(web_dir)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dest)
     dash = out_dir / "dashboard.html"
-    shutil.copyfile(template, dash)
-    web = template.parent
-    for page in ("query.html", "map.html", "fda.html"):
-        if (web / page).exists():
-            shutil.copyfile(web / page, out_dir / page)
-    if (web / "vendor").exists():
-        (out_dir / "vendor").mkdir(exist_ok=True)
-        for v in ("leaflet.js", "leaflet.css"):
-            shutil.copyfile(web / "vendor" / v, out_dir / "vendor" / v)
     n_unc = len(payload["uncategorized"])
     print(f"儀表板：{dash}（發票 {payload['invoiceCount']} 張、"
           f"{len(payload['months'])} 個月）")
