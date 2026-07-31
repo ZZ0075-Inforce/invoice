@@ -102,3 +102,64 @@
               td  "AA1"
       div.more
   div.note  "資料截至 2026-07-31 09:00・全部在本機運算、不外連（docs/adr/0002）・品項與發票號碼只存在本機 data.js"
+
+── 亮色
+@tokens --page=#f9f9f7 --surface-1=#fcfcfb --text-1=#0b0b0b --text-2=#52514e --muted=#898781 --border=rgba(11,11,11,0.10) --grid=#e1e0d9 --baseline=#c3c2b7 --other=#898781 --s1=#2a78d6 --s2=#eb6834 --s3=#1baf7a --s4=#eda100 --s5=#e87ba4 --s6=#008300 --warning=— --serious=— --event=— --up-good=#006300
+@style body  color=rgb(11, 11, 11) background-color=rgb(249, 249, 247) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=24px border-radius=0px border-top-width=0px display=block
+@style header h1  color=rgb(11, 11, 11) background-color=rgba(0, 0, 0, 0) font-size=20px font-weight=650 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
+@style .sub  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12.5px font-weight=400 margin-top=2px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
+@style .tiles  (無此元素)
+@style .tile  (無此元素)
+@style .card  color=rgb(11, 11, 11) background-color=rgb(252, 252, 251) font-size=14px font-weight=400 margin-top=0px margin-bottom=16px padding-top=16px border-radius=10px border-top-width=1px display=block
+@style .desc  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=400 margin-top=0px margin-bottom=10px padding-top=0px border-radius=0px border-top-width=0px display=block
+@style .note  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=400 margin-top=10px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
+@style .scrollx  color=rgb(11, 11, 11) background-color=rgba(0, 0, 0, 0) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
+@style table  color=rgb(11, 11, 11) background-color=rgba(0, 0, 0, 0) font-size=13px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=table
+@style table th  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=500 margin-top=0px margin-bottom=0px padding-top=4px border-radius=0px border-top-width=0px display=table-cell
+@style td.num  color=rgb(11, 11, 11) background-color=rgba(0, 0, 0, 0) font-size=13px font-weight=400 margin-top=0px margin-bottom=0px padding-top=5px border-radius=0px border-top-width=0px display=table-cell
+@style .wrap  color=rgb(11, 11, 11) background-color=rgba(0, 0, 0, 0) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
+@style button.theme  color=rgb(82, 81, 78) background-color=rgb(252, 252, 251) font-size=12px font-weight=400 margin-top=0px margin-bottom=0px padding-top=3px border-radius=999px border-top-width=1px display=block
+@style #stat  (無此元素)
+@style button.chip  color=rgb(42, 120, 214) background-color=rgb(252, 252, 251) font-size=13px font-weight=650 margin-top=0px margin-bottom=0px padding-top=4px border-radius=999px border-top-width=1px display=block
+@style i.swatch  (無此元素)
+@style .empty  (無此元素)
+── 深色（data-theme）
+@tokens --page=#0d0d0d --surface-1=#1a1a19 --text-1=#ffffff --text-2=#c3c2b7 --muted=#898781 --border=rgba(255,255,255,0.10) --grid=#2c2c2a --baseline=#383835 --other=#898781 --s1=#3987e5 --s2=#d95926 --s3=#199e70 --s4=#c98500 --s5=#d55181 --s6=#008300 --warning=— --serious=— --event=— --up-good=#0ca30c
+@style body  color=rgb(255, 255, 255) background-color=rgb(13, 13, 13) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=24px border-radius=0px border-top-width=0px display=block
+@style header h1  color=rgb(255, 255, 255) background-color=rgba(0, 0, 0, 0) font-size=20px font-weight=650 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
+@style .sub  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12.5px font-weight=400 margin-top=2px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
+@style .tiles  (無此元素)
+@style .tile  (無此元素)
+@style .card  color=rgb(255, 255, 255) background-color=rgb(26, 26, 25) font-size=14px font-weight=400 margin-top=0px margin-bottom=16px padding-top=16px border-radius=10px border-top-width=1px display=block
+@style .desc  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=400 margin-top=0px margin-bottom=10px padding-top=0px border-radius=0px border-top-width=0px display=block
+@style .note  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=400 margin-top=10px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
+@style .scrollx  color=rgb(255, 255, 255) background-color=rgba(0, 0, 0, 0) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
+@style table  color=rgb(255, 255, 255) background-color=rgba(0, 0, 0, 0) font-size=13px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=table
+@style table th  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=500 margin-top=0px margin-bottom=0px padding-top=4px border-radius=0px border-top-width=0px display=table-cell
+@style td.num  color=rgb(255, 255, 255) background-color=rgba(0, 0, 0, 0) font-size=13px font-weight=400 margin-top=0px margin-bottom=0px padding-top=5px border-radius=0px border-top-width=0px display=table-cell
+@style .wrap  color=rgb(255, 255, 255) background-color=rgba(0, 0, 0, 0) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
+@style button.theme  color=rgb(195, 194, 183) background-color=rgb(26, 26, 25) font-size=12px font-weight=400 margin-top=0px margin-bottom=0px padding-top=3px border-radius=999px border-top-width=1px display=block
+@style #stat  (無此元素)
+@style button.chip  color=rgb(57, 135, 229) background-color=rgb(26, 26, 25) font-size=13px font-weight=650 margin-top=0px margin-bottom=0px padding-top=4px border-radius=999px border-top-width=1px display=block
+@style i.swatch  (無此元素)
+@style .empty  (無此元素)
+── 深色（prefers-color-scheme）
+@tokens --page=#0d0d0d --surface-1=#1a1a19 --text-1=#ffffff --text-2=#c3c2b7 --muted=#898781 --border=rgba(255,255,255,0.10) --grid=#2c2c2a --baseline=#383835 --other=#898781 --s1=#3987e5 --s2=#d95926 --s3=#199e70 --s4=#c98500 --s5=#d55181 --s6=#008300 --warning=— --serious=— --event=— --up-good=#0ca30c
+@style body  color=rgb(255, 255, 255) background-color=rgb(13, 13, 13) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=24px border-radius=0px border-top-width=0px display=block
+@style header h1  color=rgb(255, 255, 255) background-color=rgba(0, 0, 0, 0) font-size=20px font-weight=650 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
+@style .sub  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12.5px font-weight=400 margin-top=2px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
+@style .tiles  (無此元素)
+@style .tile  (無此元素)
+@style .card  color=rgb(255, 255, 255) background-color=rgb(26, 26, 25) font-size=14px font-weight=400 margin-top=0px margin-bottom=16px padding-top=16px border-radius=10px border-top-width=1px display=block
+@style .desc  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=400 margin-top=0px margin-bottom=10px padding-top=0px border-radius=0px border-top-width=0px display=block
+@style .note  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=400 margin-top=10px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
+@style .scrollx  color=rgb(255, 255, 255) background-color=rgba(0, 0, 0, 0) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
+@style table  color=rgb(255, 255, 255) background-color=rgba(0, 0, 0, 0) font-size=13px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=table
+@style table th  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=500 margin-top=0px margin-bottom=0px padding-top=4px border-radius=0px border-top-width=0px display=table-cell
+@style td.num  color=rgb(255, 255, 255) background-color=rgba(0, 0, 0, 0) font-size=13px font-weight=400 margin-top=0px margin-bottom=0px padding-top=5px border-radius=0px border-top-width=0px display=table-cell
+@style .wrap  color=rgb(255, 255, 255) background-color=rgba(0, 0, 0, 0) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
+@style button.theme  color=rgb(195, 194, 183) background-color=rgb(26, 26, 25) font-size=12px font-weight=400 margin-top=0px margin-bottom=0px padding-top=3px border-radius=999px border-top-width=1px display=block
+@style #stat  (無此元素)
+@style button.chip  color=rgb(57, 135, 229) background-color=rgb(26, 26, 25) font-size=13px font-weight=650 margin-top=0px margin-bottom=0px padding-top=4px border-radius=999px border-top-width=1px display=block
+@style i.swatch  (無此元素)
+@style .empty  (無此元素)

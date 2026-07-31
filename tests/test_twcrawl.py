@@ -1177,6 +1177,10 @@ def test_export_items_and_query_page():
             export.write_export(conn, ws, cl)
             assert (ws.out / "query.html").exists(), "export 應就位查詢頁"
             assert (ws.out / "fda.html").exists(), "export 應就位食安頁"
+            # ui.js／ui.css 是四頁的必要相依：漏掉的話四頁都壞，而且壞成
+            # 「看起來像沒資料」。write_export 複製整個 web/ 就是為了這個
+            for asset in ("ui.js", "ui.css", "vendor/leaflet.js"):
+                assert (ws.out / asset).exists(), f"export 應就位 {asset}"
         finally:
             conn.close()
     print("✓ export：品項與發票號碼進 data.js、查詢頁就位、載具號碼排除")
@@ -1784,19 +1788,19 @@ def _stage_pages(ws, payload: dict) -> Path:
     """
     import shutil
 
-    from twcrawl.export import TEMPLATE
+    from twcrawl.export import WEB_DIR
 
     out = ws.ensure_out()
     (out / "data.js").write_text(
         "window.TWCRAWL_DATA = "
         + json.dumps(payload, ensure_ascii=False, indent=1) + ";\n",
         encoding="utf-8")
-    web = TEMPLATE.parent
-    for name in PAGE_ROOTS:
-        shutil.copyfile(web / name, out / name)
-    (out / "vendor").mkdir(exist_ok=True)
-    for v in ("leaflet.js", "leaflet.css"):
-        shutil.copyfile(web / "vendor" / v, out / "vendor" / v)
+    for src in sorted(WEB_DIR.rglob("*")):
+        if src.is_dir():
+            continue
+        dest = out / src.relative_to(WEB_DIR)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dest)
     return out
 
 
@@ -1866,13 +1870,60 @@ _DIGEST_JS = r"""
 """
 
 
+# 樣式探針：DOM 快照抓不到 CSS 的迴歸，而色票與版面正是會被搬進共用檔的東西。
+# 三種模式都量——色票在原始碼裡是三個獨立區塊（亮、data-theme、prefers-color-scheme）。
+_TOKENS = ["--page", "--surface-1", "--text-1", "--text-2", "--muted",
+           "--border", "--grid", "--baseline", "--other",
+           "--s1", "--s2", "--s3", "--s4", "--s5", "--s6",
+           "--warning", "--serious", "--event", "--up-good"]
+
+_PROBE_SELS = ["body", "header h1", ".sub", ".tiles", ".tile", ".card", ".desc",
+               ".note", ".scrollx", "table", "table th", "td.num", ".wrap",
+               "button.theme", "#stat", "button.chip", "i.swatch", ".empty"]
+
+_PROBE_PROPS = ["color", "background-color", "font-size", "font-weight",
+                "margin-top", "margin-bottom", "padding-top", "border-radius",
+                "border-top-width", "display"]
+
+_PROBE_JS = r"""
+([tokens, sels, props]) => {
+  const out = [];
+  const rs = getComputedStyle(document.documentElement);
+  out.push("@tokens " + tokens
+    .map(t => t + "=" + (rs.getPropertyValue(t).trim() || "—")).join(" "));
+  for (const sel of sels) {
+    const e = document.querySelector(sel);
+    if (!e) { out.push("@style " + sel + "  (無此元素)"); continue; }
+    const cs = getComputedStyle(e);
+    out.push("@style " + sel + "  " +
+      props.map(p => p + "=" + cs.getPropertyValue(p)).join(" "));
+  }
+  return out.join("\n");
+}
+"""
+
+
+def _style_probe(page) -> str:
+    args = [_TOKENS, _PROBE_SELS, _PROBE_PROPS]
+    blocks = ["── 亮色", page.evaluate(_PROBE_JS, args)]
+    page.evaluate("document.documentElement.dataset.theme = 'dark'")
+    blocks += ["── 深色（data-theme）", page.evaluate(_PROBE_JS, args)]
+    page.evaluate("delete document.documentElement.dataset.theme")
+    page.emulate_media(color_scheme="dark")
+    blocks += ["── 深色（prefers-color-scheme）", page.evaluate(_PROBE_JS, args)]
+    page.emulate_media(color_scheme="light")
+    return "\n".join(blocks)
+
+
 def _digest(page, page_name: str) -> str:
     import re
 
     raw = page.evaluate(_DIGEST_JS, PAGE_ROOTS[page_name])
     # 儀表板的資料鮮度用牆上時鐘算天數（dashboard.html 的 staleDays），
     # 是四頁唯一會讓快照每天變動的東西
-    return re.sub(r"已 \d+ 天", "已 N 天", raw)
+    dom = re.sub(r"已 \d+ 天", "已 N 天", raw)
+    # 樣式探針會改 data-theme 與模擬媒體，所以一定排在 DOM 快照之後
+    return dom + "\n\n" + _style_probe(page)
 
 
 def _check_golden(name: str, digest: str) -> None:
