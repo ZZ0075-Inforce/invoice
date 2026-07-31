@@ -505,7 +505,10 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   首個）。儀表板 sub 加 📅 連結；五頁測試迴圈（PAGE_ROOTS）自動涵蓋
   惡意字串/殘缺 payload；slot 錯開測試延伸到佔比條（inline 取色，DOM
   快照拍不到）；golden 新增 year.txt。真實資料 13 分類/前 10 店家零
-  JS 錯誤。測試 54/54（新頁走既有測試面，無新測試函式）
+  JS 錯誤。兩軸 review 後補修：generatedAt 補 esc（dashboard 殘留那份
+  一併修）、year.months→monthCount（與頂層 months 同名異義）、sub 文案
+  改成兩種情形都為真（不寫「今年」）、對獎磚標「已開獎期別」、樣式註解
+  改實話（抄的是 dashboard 變體）。測試 54/54（新頁走既有測試面）
 - ⬜ 緩辦（要做先問）：CSV 匯出（分類趨勢圖已做＝#11；地圖店家搜尋立案為 #15）
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

@@ -1,7 +1,7 @@
 #app
   header
     h1  "2026 年度回顧"
-    div.sub  "日曆年至今的全貌——12 月後重跑 twcrawl export 就是完整年度版"
+    div.sub  "2026 年 1 月起至最新發票的全貌——12 月後重跑 twcrawl export 就是完整年度版"
       a.map  "📊 月報"
       a.map  "🔍 查詢頁"
     button.theme  "🌗 自動"
@@ -21,7 +21,7 @@
     div.tile
       div.label  "對獎戰績"
       div.value  "NT$200"
-      div.delta  "🎉 1 筆中獎・參加 4 張"
+      div.delta  "🎉 1 筆中獎・參加 4 張（已開獎期別）"
   div.cols
     div.card
       h2  "單筆最大消費"

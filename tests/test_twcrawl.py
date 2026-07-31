@@ -2150,7 +2150,7 @@ def a_payload(**overrides) -> dict:
         # 年度回顧：總額 2767、單筆最大與最貴的一天同為 AA1（599 三張同額
         # 取最早）、對獎 1 筆 200、參加 4 張（11503 期）
         "year": {
-            "year": "2026", "total": 2767.0, "count": 9, "months": 4,
+            "year": "2026", "total": 2767.0, "count": 9, "monthCount": 4,
             "monthlyAvg": 691.75,
             "byCategory": [
                 {"name": "電信", "total": 1797.0},

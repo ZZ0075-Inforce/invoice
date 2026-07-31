@@ -380,6 +380,8 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
     # 的事實」，頁面只排版不重複聚合。年度＝庫內最新發票的年份，不用牆上
     # 時鐘——一月還沒抓新資料時不會出一頁空回顧，golden 也不吃當下日期。
     # 同額並列時取最早的（invoice_rows 依日期升冪，max 回傳第一個最大值）。
+    # 這是第四份 rollup 迴圈（月度/分類/店家之後）——by_cat 雖可由 months
+    # 導出，但 by_day 與 maxInvoice 只有列級資料算得出，一個迴圈掃完最直白。
     year = None
     if invoice_rows:
         yr = max(v["date"] for v in invoice_rows)[:4]
@@ -411,9 +413,10 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
             p["nInvoices"] for p in lottery["periods"]
             if all(m.startswith(yr)
                    for m in lottery_mod.period_months(p["period"])))
+        # monthCount 不叫 months——頂層 payload["months"] 是清單，同名異義
         year = {
             "year": yr, "total": total, "count": len(yr_rows),
-            "months": n_months, "monthlyAvg": total / n_months,
+            "monthCount": n_months, "monthlyAvg": total / n_months,
             "byCategory": sorted(
                 ({"name": k, "total": t} for k, t in by_cat.items()),
                 key=lambda c: -c["total"]),

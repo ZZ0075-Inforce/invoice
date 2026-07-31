@@ -804,7 +804,7 @@ TW.page({
   }
 
   const foot = el("div", "note",
-    `資料截至 ${D.generatedAt} 由 twcrawl export 產生・全部在本機、不自動外連、` +
+    `資料截至 ${esc(D.generatedAt || "")} 由 twcrawl export 產生・全部在本機、不自動外連、` +
     "不上雲（docs/adr/0001）・「地圖」連結點擊時才會把店名帶去 Google 搜尋");
   app.append(foot);
 

@@ -7,8 +7,9 @@
 <script src="ui.js"></script>
 <link rel="stylesheet" href="ui.css">
 <style>
-  /* 文件版面與其他三頁逐字相同（ui.css 刻意留各頁的那組）；
-     .brow 分類佔比列是本頁專屬 */
+  /* 文件版面抄的是 dashboard 那份變體（header 間距、.tile .value 26px、
+     a.map 12px——query/fda 是另一份）；body/button.theme/h1 本來就刻意
+     留各頁（ui.css 註解）。.brow 分類佔比列是本頁專屬 */
   body {
     background: var(--page); color: var(--text-1);
     font-family: system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif;
@@ -60,8 +61,11 @@ TW.page({
   const pct = (part, whole) => whole > 0 ? Math.round(part / whole * 100) : 0;
 
   const hd = el("header");
+  // 文案不寫「今年」：年度＝庫內最新發票的年份（一月還沒抓新資料時看到
+  // 的是去年完整年度），這句對兩種情形都要成立
   hd.innerHTML = `<h1>${esc(Y.year)} 年度回顧</h1><div class="sub">` +
-    "日曆年至今的全貌——12 月後重跑 twcrawl export 就是完整年度版　" +
+    `${esc(Y.year)} 年 1 月起至最新發票的全貌——` +
+    "12 月後重跑 twcrawl export 就是完整年度版　" +
     '<a class="map" href="dashboard.html">📊 月報</a>　' +
     '<a class="map" href="query.html">🔍 查詢頁</a></div>';
   hd.append(ui.themeButton());
@@ -70,12 +74,12 @@ TW.page({
   // ---- 年度統計磚 -------------------------------------------------------
   const tiles = el("div", "tiles");
   const lotLine = (Y.lottery.wins ? `🎉 ${Y.lottery.wins} 筆中獎・` : "") +
-    `參加 ${Y.lottery.invoices} 張`;
+    `參加 ${Y.lottery.invoices} 張（已開獎期別）`;
   const defs = [
     { label: `年度支出（${esc(Y.year)} 年）`, value: nt(Y.total),
-      extra: `<div class="delta">${Y.count} 張發票・${Y.months} 個月</div>` },
+      extra: `<div class="delta">${Y.count} 張發票・${Y.monthCount} 個月</div>` },
     { label: "月均支出", value: nt(Y.monthlyAvg),
-      extra: `<div class="delta">以有資料的 ${Y.months} 個月平均</div>` },
+      extra: `<div class="delta">以有資料的 ${Y.monthCount} 個月平均</div>` },
     { label: "非必要消費", value: nt(Y.unnecessary.total),
       extra: `<div class="delta">${Y.unnecessary.count} 筆・佔全年 ${
         pct(Y.unnecessary.total, Y.total)}%</div>` },
@@ -148,7 +152,7 @@ TW.page({
   app.append(sc);
 
   app.append(el("div", "note",
-    `資料截至 ${D.generatedAt} 由 twcrawl export 產生・全部在本機、` +
+    `資料截至 ${esc(D.generatedAt || "")} 由 twcrawl export 產生・全部在本機、` +
     "不自動外連、不上雲（docs/adr/0001）"));
   },
 });
