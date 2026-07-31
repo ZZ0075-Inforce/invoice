@@ -1625,6 +1625,454 @@ def test_cli_wires_paths_through_workspace():
     print("✓ CLI：產物全落在工作區、match→export 路徑同源、--db 已移除")
 
 
+# ------------------------------------------------------ 四頁煙霧測試 -----
+#
+# 這些測試喂頁面「合成 payload」，不指向 out/。原因不是圖方便：out/ 是真實
+# 消費紀錄，斷言一旦寫上真實金額與店家名就進不了 repo（見 CLAUDE.md 的個資
+# 界線）。專案史上為了 UI 打磨寫過十幾個指向 out/ 的煙霧腳本，全部只能留在
+# 暫存目錄然後丟掉——這裡是它們的常駐版本。
+#
+# 頁面的 interface 是 window.TWCRAWL_DATA → DOM，資料庫不在其中，所以 payload
+# 由 a_payload() 直接造；它與 export.build_payload 的形狀由 test_payload_contract
+# 釘住，手打的 fixture 才漂不掉。
+
+GOLDEN_DIR = Path(__file__).resolve().parent / "golden"
+UPDATE_GOLDEN = "--update-golden" in sys.argv
+
+# 頁面的可用性判準各不相同，快照的根容器也不同：地圖的 #map 由 Leaflet 管理
+# （圖磚 div 隨視窗大小變動），不進快照
+PAGE_ROOTS = {
+    "dashboard.html": ["#app"],
+    "query.html": ["#app"],
+    "fda.html": ["#app"],
+    "map.html": ["#chips", "#legend", "#stat", "#nogeo", "#sellergeo"],
+}
+
+
+def a_payload(**overrides) -> dict:
+    """合成的 data.js payload——四頁煙霧測試的輸入。
+
+    四個月、九張發票，數字刻意小而可心算，好讓 golden 快照的 diff 讀得懂：
+    電信 599×3（構成固定支出）、超市 250/200/300、手搖飲 60×2（非必要）、
+    一家未分類店家（給儀表板的歸類卡）。overrides 取代整個頂層鍵。
+    """
+    inv = [
+        ("AA1", "2026-03-05", "測試電信", "電信", 599.0, [("月租費", 599.0)]),
+        ("AA2", "2026-03-12", "測試超市", "超市", 250.0, [("雞蛋", 250.0)]),
+        ("AA3", "2026-04-05", "測試電信", "電信", 599.0, [("月租費", 599.0)]),
+        ("AA4", "2026-04-18", "珍奶測試店", "手搖飲", 60.0, [("珍珠鮮奶茶", 60.0)]),
+        ("AA5", "2026-05-05", "測試電信", "電信", 599.0, [("月租費", 599.0)]),
+        ("AA6", "2026-05-10", "測試超市", "超市", 200.0, [("牛奶", 200.0)]),
+        ("AA7", "2026-05-12", "神秘測試舖", "未分類", 100.0, []),
+        ("AA8", "2026-06-01", "測試超市", "超市", 300.0, [("米", 300.0)]),
+        ("AA9", "2026-06-05", "珍奶測試店", "手搖飲", 60.0, [("珍珠鮮奶茶", 60.0)]),
+    ]
+    invoices = [
+        {"num": n, "date": d, "seller": s, "category": c, "amount": a,
+         "items": [{"desc": desc, "qty": 1, "price": amt, "amount": amt}
+                   for desc, amt in items]}
+        for n, d, s, c, a, items in inv
+    ]
+    months = [
+        {"month": "2026-03", "total": 849.0, "count": 2,
+         "byCategory": {"電信": 599.0, "超市": 250.0}},
+        {"month": "2026-04", "total": 659.0, "count": 2,
+         "byCategory": {"電信": 599.0, "手搖飲": 60.0}},
+        {"month": "2026-05", "total": 899.0, "count": 3,
+         "byCategory": {"電信": 599.0, "超市": 200.0, "未分類": 100.0}},
+        {"month": "2026-06", "total": 360.0, "count": 2,
+         "byCategory": {"超市": 300.0, "手搖飲": 60.0}},
+    ]
+    unclassified = {
+        "name": "神秘測試舖", "category": "未分類", "total": 100.0, "count": 1,
+        "legal": None, "industry": "其他綜合零售", "address": None,
+        "lat": None, "lon": None, "topItems": [],
+    }
+    payload = {
+        "generatedAt": "2026-07-31 09:00",
+        "invoiceCount": len(invoices),
+        "invoices": invoices,
+        "fixed": [
+            {"seller": "測試電信", "amount": 599.0, "periodDays": 31, "n": 3,
+             "first": "2026-03-05", "last": "2026-05-05", "next": "2026-06-05",
+             "active": True, "monthly": 588.18},
+        ],
+        "months": months,
+        "categories": [
+            {"name": "電信", "total": 1797.0, "count": 3, "unnecessary": False},
+            {"name": "超市", "total": 750.0, "count": 3, "unnecessary": False},
+            {"name": "手搖飲", "total": 120.0, "count": 2, "unnecessary": True},
+            {"name": "未分類", "total": 100.0, "count": 1, "unnecessary": False},
+        ],
+        "sellers": [
+            {"name": "測試電信", "category": "電信", "total": 1797.0, "count": 3,
+             "legal": "測試電信股份有限公司", "industry": "電信服務",
+             "address": None, "lat": None, "lon": None, "topItems": ["月租費"]},
+            {"name": "測試超市", "category": "超市", "total": 750.0, "count": 3,
+             "legal": "測試超市股份有限公司", "industry": "超級市場",
+             "address": "臺北市測試區測試路 1 號", "lat": 25.03, "lon": 121.56,
+             "topItems": ["雞蛋", "米", "牛奶"]},
+            {"name": "珍奶測試店", "category": "手搖飲", "total": 120.0, "count": 2,
+             "legal": None, "industry": None, "address": None,
+             "lat": None, "lon": None, "topItems": ["珍珠鮮奶茶"]},
+            unclassified,
+        ],
+        "unnecessary": [
+            {"date": "2026-06-05", "seller": "珍奶測試店",
+             "category": "手搖飲", "amount": 60.0},
+            {"date": "2026-04-18", "seller": "珍奶測試店",
+             "category": "手搖飲", "amount": 60.0},
+        ],
+        "uncategorized": [unclassified],
+        "fda": {
+            "rows": 12,
+            "match": {"店家": 1, "品項": 1},
+            "matches": [
+                {"level": "店家", "date": "2026-05-10", "num": "AA6",
+                 "invoice": "測試超市", "fda": "測試超市股份有限公司",
+                 "source": "edible_oil"},
+                {"level": "品項", "date": "2026-03-12", "num": "AA2",
+                 "invoice": "雞蛋", "fda": "測試品名雞蛋", "source": "csm_news"},
+            ],
+            "sources": [
+                {"key": "edible_oil", "label": "中聯油脂案", "kind": "事件",
+                 "rows": 8, "lastSeen": "2026-07-20", "hits": 1},
+                {"key": "csm_news", "label": "國內回收公告", "kind": "監測",
+                 "rows": 4, "lastSeen": "2026-07-25", "hits": 1},
+            ],
+        },
+        "lottery": {
+            "uncovered": 2,
+            "periods": [
+                {"period": "11503", "label": "115年03-04月",
+                 "months": ["2026-03", "2026-04"],
+                 "claimStart": "2026-06-06", "claimEnd": "2026-09-05",
+                 "nInvoices": 4,
+                 "wins": [
+                     {"num": "AA3", "date": "2026-04-05", "seller": "測試電信",
+                      "prize": "六獎", "prizeAmount": 200, "also": None,
+                      "claimEnd": "2026-09-05", "periodLabel": "115年03-04月"},
+                 ]},
+            ],
+            "next": {"label": "115年05-06月", "drawDate": "2026-09-25",
+                     "pending": 5},
+        },
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _replace_strings(obj, mapping: dict[str, str]):
+    """遞迴字串取代（含 dict 的鍵——byCategory 的分類名是鍵）。"""
+    if isinstance(obj, str):
+        for old, new in mapping.items():
+            obj = obj.replace(old, new)
+        return obj
+    if isinstance(obj, list):
+        return [_replace_strings(x, mapping) for x in obj]
+    if isinstance(obj, dict):
+        return {_replace_strings(k, mapping): _replace_strings(v, mapping)
+                for k, v in obj.items()}
+    return obj
+
+
+def _stage_pages(ws, payload: dict) -> Path:
+    """把 payload 與四頁模板就位到工作區的 out/，回傳該目錄。
+
+    刻意不走 export.write_export：這裡測的是「頁面吃 payload」，
+    不該把 export 的資料庫存取也拖進來。
+    """
+    import shutil
+
+    from twcrawl.export import TEMPLATE
+
+    out = ws.ensure_out()
+    (out / "data.js").write_text(
+        "window.TWCRAWL_DATA = "
+        + json.dumps(payload, ensure_ascii=False, indent=1) + ";\n",
+        encoding="utf-8")
+    web = TEMPLATE.parent
+    for name in PAGE_ROOTS:
+        shutil.copyfile(web / name, out / name)
+    (out / "vendor").mkdir(exist_ok=True)
+    for v in ("leaflet.js", "leaflet.css"):
+        shutil.copyfile(web / "vendor" / v, out / "vendor" / v)
+    return out
+
+
+# 1×1 透明 PNG：地圖的 OSM 圖磚在測試裡就地滿足，不對外連線、不產生 console 錯誤
+_PNG_1X1 = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
+    b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
+
+
+def _stub_tiles(ctx) -> None:
+    ctx.route("**://*.openstreetmap.org/**", lambda r: r.fulfill(
+        status=200, content_type="image/png", body=_PNG_1X1))
+
+
+def _open(ctx, out: Path, page_name: str, query: str = ""):
+    """開一頁，回傳 (page, errs)。errs 收 pageerror 與 console.error。"""
+    page = ctx.new_page()
+    errs: list[str] = []
+    page.on("pageerror", lambda e: errs.append(f"pageerror: {e}"))
+    page.on("console",
+            lambda m: errs.append(f"console.error: {m.text}")
+            if m.type == "error" else None)
+    page.goto((out / page_name).as_uri() + query)
+    page.wait_for_timeout(500)
+    return page, errs
+
+
+_DIGEST_JS = r"""
+(sels) => {
+  const SVG = "http://www.w3.org/2000/svg";
+  const lines = [];
+  const ownText = e => {
+    let t = "";
+    for (const n of e.childNodes) if (n.nodeType === 3) t += n.nodeValue;
+    return t.replace(/\s+/g, " ").trim();
+  };
+  const label = e => {
+    const cls = (e.getAttribute("class") || "").trim();
+    return e.tagName.toLowerCase() +
+      (cls ? "." + cls.split(/\s+/).filter(Boolean).join(".") : "");
+  };
+  const walk = (e, depth) => {
+    const pad = "  ".repeat(depth);
+    if (e.namespaceURI === SVG) {      // SVG 內部收斂成一行統計，快照才讀得懂
+      const kinds = {};
+      for (const d of e.querySelectorAll("*"))
+        kinds[d.tagName] = (kinds[d.tagName] || 0) + 1;
+      lines.push(pad + "svg [" + Object.keys(kinds).sort()
+        .map(k => k + "*" + kinds[k]).join(" ") + "]");
+      return;
+    }
+    const t = ownText(e);
+    lines.push(pad + label(e) + (t ? "  " + JSON.stringify(t) : ""));
+    for (const c of e.children) walk(c, depth + 1);
+  };
+  for (const sel of sels) {
+    const root = document.querySelector(sel);
+    if (!root) { lines.push(sel + "  (缺少)"); continue; }
+    // 根自己的文字也要收：地圖的 #stat 是用 textContent 填的，沒有子元素
+    const rt = ownText(root);
+    lines.push(sel + (rt ? "  " + JSON.stringify(rt) : ""));
+    for (const c of root.children) walk(c, 1);
+  }
+  return lines.join("\n");
+}
+"""
+
+
+def _digest(page, page_name: str) -> str:
+    import re
+
+    raw = page.evaluate(_DIGEST_JS, PAGE_ROOTS[page_name])
+    # 儀表板的資料鮮度用牆上時鐘算天數（dashboard.html 的 staleDays），
+    # 是四頁唯一會讓快照每天變動的東西
+    return re.sub(r"已 \d+ 天", "已 N 天", raw)
+
+
+def _check_golden(name: str, digest: str) -> None:
+    path = GOLDEN_DIR / f"{name}.txt"
+    if UPDATE_GOLDEN:
+        GOLDEN_DIR.mkdir(exist_ok=True)
+        path.write_text(digest + "\n", encoding="utf-8")
+        print(f"  ↻ 重生 {path.name}（{len(digest.splitlines())} 行）")
+        return
+    assert path.exists(), (
+        f"缺少快照 {path}——第一次建立請跑："
+        f"python -X utf8 tests/test_twcrawl.py --update-golden")
+    want = path.read_text(encoding="utf-8").rstrip("\n")
+    if want != digest:
+        got_lines, want_lines = digest.splitlines(), want.splitlines()
+        diff = next(
+            (f"第 {i + 1} 行\n    快照：{w!r}\n    實際：{g!r}"
+             for i, (w, g) in enumerate(zip(want_lines, got_lines)) if w != g),
+            f"行數：快照 {len(want_lines)}、實際 {len(got_lines)}")
+        raise AssertionError(
+            f"{name} 的畫面與快照不符——\n  {diff}\n"
+            "  確認是有意的改動之後，跑 --update-golden 重生並審閱 diff。")
+
+
+def test_pages_render_and_match_golden():
+    """四頁（含兩個深連結變體）以合成 payload 渲染：零錯誤、結構與快照一致。"""
+    from urllib.parse import quote
+
+    from twcrawl.workspace import Workspace
+
+    cases = [
+        ("dashboard", "dashboard.html", ""),
+        ("query", "query.html", ""),
+        ("query-fixed", "query.html", "?view=fixed"),
+        ("query-cat", "query.html", "?cat=" + quote("手搖飲")),
+        ("fda", "fda.html", "?src=csm_news"),
+        ("map", "map.html", ""),
+    ]
+    with TemporaryDirectory() as td:
+        ws = Workspace(Path(td))
+        out = _stage_pages(ws, a_payload())
+        with browser_context(session_file=None, headed=False) as ctx:
+            _stub_tiles(ctx)
+            for name, page_name, query in cases:
+                page, errs = _open(ctx, out, page_name, query)
+                assert not errs, f"{name} 有 JS 錯誤：{errs}"
+                digest = _digest(page, page_name)
+                assert digest.strip(), f"{name} 什麼都沒渲染"
+                _check_golden(name, digest)
+                page.close()
+    print("✓ 四頁以合成 payload 渲染：零 JS 錯誤、結構快照一致（含深連結變體）")
+
+
+def test_pages_survive_hostile_and_edge_payloads():
+    """店家名含標記不得注入 DOM；殘缺的 payload 不得讓整頁空白。"""
+    from twcrawl.workspace import Workspace
+
+    # 自訂元素：不會渲染出任何東西，但沒跳脫的話 querySelector 找得到
+    xss = '<twcrawl-xss></twcrawl-xss>"'
+    hostile = _replace_strings(
+        a_payload(), {"珍奶測試店": "珍奶" + xss, "手搖飲": "手搖" + xss,
+                      "其他綜合零售": "零售" + xss, "六獎": "六獎" + xss})
+
+    lot = a_payload()["lottery"]
+    edges = [
+        # 缺陷：drawDate 為 null 時 slice() 會 throw，而 throw 發生在
+        # app.innerHTML = "" 之後——畫面與「找不到 data.js」一模一樣
+        ("drawDate 缺漏",
+         a_payload(lottery={**lot, "periods": [],
+                            "next": {"label": "x", "drawDate": None,
+                                     "pending": 3}})),
+        ("沒有比對報告",
+         a_payload(fda={"rows": 0, "match": None, "matches": None,
+                        "sources": []})),
+        ("舊版 data.js（發票沒有品項）",
+         a_payload(invoices=[{k: v for k, v in inv.items() if k != "items"}
+                             for inv in a_payload()["invoices"]])),
+    ]
+
+    with TemporaryDirectory() as td:
+        ws = Workspace(Path(td))
+        with browser_context(session_file=None, headed=False) as ctx:
+            _stub_tiles(ctx)
+
+            out = _stage_pages(ws, hostile)
+            for page_name in PAGE_ROOTS:
+                page, errs = _open(ctx, out, page_name)
+                assert not errs, f"{page_name} 吃到惡意字串就出錯：{errs}"
+                # 儀表板多數跳脫點在 tooltip，要派事件才會渲染
+                page.evaluate("""() => {
+                  for (const r of document.querySelectorAll(
+                      "svg rect[fill='transparent']"))
+                    r.dispatchEvent(new MouseEvent("mousemove",
+                      {clientX: 20, clientY: 20, bubbles: true}));
+                }""")
+                n = page.evaluate(
+                    "document.querySelectorAll('twcrawl-xss').length")
+                assert n == 0, (
+                    f"{page_name} 把店家／分類名當 HTML 執行了（{n} 個節點）"
+                    "——payload 字串進 innerHTML 前一律要經 esc")
+                page.close()
+
+            for label, payload in edges:
+                out = _stage_pages(ws, payload)
+                for page_name in PAGE_ROOTS:
+                    page, errs = _open(ctx, out, page_name)
+                    assert not errs, f"{page_name}／{label}：{errs}"
+                    filled = page.evaluate(
+                        "!!document.querySelector('#app, #legend')"
+                        " && document.body.innerText.trim().length > 0")
+                    assert filled, f"{page_name}／{label}：整頁空白"
+                    page.close()
+    print("✓ 四頁：惡意字串不進 DOM、殘缺 payload 不讓整頁空白")
+
+
+def test_payload_contract():
+    """a_payload() 的形狀必須跟 export.build_payload 一致，手打的 fixture 才漂不掉。"""
+    from twcrawl import export, lottery
+    from twcrawl.categories import Classifier
+    from twcrawl.workspace import Workspace
+
+    # 以領域值為鍵的對照表（命中層級、分類名），鍵隨資料變動不是形狀的一部分
+    value_keyed = {"fda.match", "months[].byCategory"}
+
+    def shape(v, path=""):
+        """{路徑} 集合：dict 收鍵、list 取首元素往下走。"""
+        out: set[str] = set()
+        if path in value_keyed:
+            return out
+        if isinstance(v, dict):
+            for k, sub in v.items():
+                p = f"{path}.{k}" if path else k
+                out.add(p)
+                out |= shape(sub, p)
+        elif isinstance(v, list):
+            # 聯集而非只看首元素：某張發票沒有品項，不該讓 items 的欄位隱形
+            for x in v:
+                out |= shape(x, path + "[]")
+        return out
+
+    with TemporaryDirectory() as td:
+        td = Path(td)
+        ws = Workspace(td)
+        ws.ensure_out()
+        ws.match_report.write_text(
+            "﻿level,inv_num,inv_date,invoice_side,fda_side,source\n"
+            "店家,AA2,2026-03-12,測試超市,測試超市股份有限公司,edible_oil\n",
+            encoding="utf-8")
+        conn = db.connect(ws.db)
+        try:
+            # 四個月、電信 599×3 → 固定支出；未分類店家 → uncategorized；
+            # 手搖飲 → unnecessary；中獎號碼 → lottery.periods 與 next
+            db.upsert_invoices(conn, [
+                {"inv_num": "AA1", "inv_date": "2026-03-05",
+                 "seller_name": "測試電信", "amount": 599.0},
+                {"inv_num": "AA2", "inv_date": "2026-03-12",
+                 "seller_name": "測試超市", "amount": 250.0},
+                {"inv_num": "AA3", "inv_date": "2026-04-05",
+                 "seller_name": "測試電信", "amount": 599.0},
+                {"inv_num": "AB12345678", "inv_date": "2026-04-18",
+                 "seller_name": "五十嵐測試店", "amount": 60.0},
+                {"inv_num": "AA5", "inv_date": "2026-05-05",
+                 "seller_name": "測試電信", "amount": 599.0},
+                {"inv_num": "AA7", "inv_date": "2026-05-12",
+                 "seller_name": "神秘測試舖", "amount": 100.0},
+            ])
+            db.upsert_items(conn, [
+                {"inv_num": "AA2", "row_no": 1, "description": "雞蛋",
+                 "quantity": 1, "unit_price": 250.0, "amount": 250.0},
+            ])
+            db.upsert_lottery_draws(conn, [
+                {"period": "11503", "special": "11223344", "grand": "55667788",
+                 "first": ["12345678"], "extra": ["217"],
+                 "claim_start": "2026-06-06", "claim_end": "2026-09-05"},
+            ])
+            real = export.build_payload(conn, ws, Classifier(ws.rules))
+        finally:
+            conn.close()  # Windows：先關連線才能清 TemporaryDirectory
+
+    fake = a_payload()
+    assert set(real) == set(fake), (
+        f"頂層鍵漂了——build_payload 多了 {set(real) - set(fake)}、"
+        f"少了 {set(fake) - set(real)}")
+
+    # 只比對兩邊都非空的部分；空的照實印出來，不假裝比過了
+    skipped = []
+    for key in sorted(real):
+        if isinstance(real[key], list) and not real[key]:
+            skipped.append(key)
+            continue
+        want, got = shape(fake[key], key), shape(real[key], key)
+        assert want == got, (
+            f"{key} 的形狀漂了——build_payload 多了 {sorted(got - want)}、"
+            f"少了 {sorted(want - got)}")
+    assert lottery.period_label("11503") == "115年03-04月", \
+        "a_payload 的期別標籤是照 lottery.period_label 手寫的"
+    note = f"（未比對空清單：{', '.join(skipped)}）" if skipped else ""
+    print(f"✓ 合成 payload 與 build_payload 形狀一致{note}")
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

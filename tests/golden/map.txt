@@ -1,0 +1,17 @@
+#chips
+  button.chip  "全部"
+  button.chip.on  "近三月"
+  button.chip  "近一月"
+#legend
+  button.leg.on  "電信"
+    i.swatch
+  button.leg.on  "超市"
+    i.swatch
+  button.leg.on  "手搖飲"
+    i.swatch
+  button.leg.on  "其他/未分類"
+    i.swatch
+#stat  "2026-04 ～ 2026-06：7 張發票・NT$1,918・地圖顯示 1 家（NT$500）"
+#nogeo  "無座標（發票沒帶統編、未跑 bizreg/geocode 或地址解不開，金額不在地圖上）：測試電信 NT$1,198・珍奶測試店 NT$120・神秘測試舖 NT$100"
+#sellergeo
+  option

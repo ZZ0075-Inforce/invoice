@@ -159,6 +159,10 @@
 
   const nt = x => "NT$" + Math.round(x).toLocaleString("zh-TW");
   const compact = x => x >= 10000 ? "NT$" + (x/10000).toFixed(1) + " 萬" : nt(x);
+  // 店家名／分類名／稅籍行業都是使用者資料，一律經 esc 再進 innerHTML
+  // （另外三頁本來就有這支，這頁以前沒有）
+  const esc = s => String(s).replace(/[&<>"]/g,
+    ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]));
   // 地圖連結：使用者點擊才離開頁面（頁面本身不自動外連，見 docs/adr/0001）
   // 有稅籍地址就一併帶上，搜尋準得多
   const mapsUrl = (name, addr) => "https://www.google.com/maps/search/?api=1&query=" +
@@ -284,9 +288,12 @@
         ? "跑 twcrawl lottery 更新中獎號碼"
         : lotWins.length ? `🎉 ${lotWins.length} 筆——別忘了領獎`
         : `近 ${lot.periods.length} 期共 ${lotN} 張參加`}</div>` +
-        (lot.next && lot.next.pending ? `<div class="delta">${
-          lot.next.pending} 張待 ${Number(lot.next.drawDate.slice(5, 7))}/${
-          Number(lot.next.drawDate.slice(8))} 開獎</div>` : "") },
+        // drawDate 缺漏不該讓整頁空白：這段 throw 會發生在 app.innerHTML = ""
+        // 之後，看起來與「找不到 data.js」一模一樣
+        (lot.next && lot.next.pending && lot.next.drawDate
+          ? `<div class="delta">${lot.next.pending} 張待 ${
+              Number(lot.next.drawDate.slice(5, 7))}/${
+              Number(lot.next.drawDate.slice(8))} 開獎</div>` : "") },
   ];
   for (const t of tileDefs) {
     const tile = el("div", "tile");
@@ -333,14 +340,14 @@
       '<th class="num">獎金</th><th>發票號碼</th><th>日期</th><th>店家</th>' +
       "<th>領獎期限</th></tr>" +
       lotWins.map(x =>
-        `<tr><td>${x.periodLabel}</td><td>${x.prize}${x.also
+        `<tr><td>${esc(x.periodLabel)}</td><td>${esc(x.prize)}${x.also
           ? ` <span style="color:var(--muted);font-size:11px">` +
-            `（另符合${x.also}，擇高）</span>` : ""}</td>` +
+            `（另符合${esc(x.also)}，擇高）</span>` : ""}</td>` +
         `<td class="num">${nt(x.prizeAmount)}</td>` +
-        `<td><a class="map" href="query.html?q=${x.num}" ` +
-        `title="在查詢頁看這張發票（可展開品項）">${x.num}</a></td>` +
-        `<td>${x.date}</td><td>${x.seller || "—"}</td>` +
-        `<td>${x.claimEnd}</td></tr>`).join("") + "</table>";
+        `<td><a class="map" href="query.html?q=${encodeURIComponent(x.num)}" ` +
+        `title="在查詢頁看這張發票（可展開品項）">${esc(x.num)}</a></td>` +
+        `<td>${esc(x.date)}</td><td>${x.seller ? esc(x.seller) : "—"}</td>` +
+        `<td>${esc(x.claimEnd)}</td></tr>`).join("") + "</table>";
     lc.append(wrapT);
     app.append(lc);
   }
@@ -354,7 +361,7 @@
   let selCat = null;                 // 點選中的分類；null＝全部堆疊
   series.forEach((s, i) => {
     const b = el("button", "leg",
-      `<i class="swatch" style="background:${color(i)}"></i>${s}`);
+      `<i class="swatch" style="background:${color(i)}"></i>${esc(s)}`);
     b.addEventListener("click", () => {
       selCat = selCat === s ? null : s;
       for (const x of legend.children)
@@ -431,7 +438,7 @@
         if (selCat) {
           const v = m.by[selCat] || 0;
           const pct = m.total > 0 ? Math.round(v / m.total * 100) : 0;
-          showTip(evt, `<div class="tt-title">${m.month}・${selCat}</div>` +
+          showTip(evt, `<div class="tt-title">${esc(m.month)}・${esc(selCat)}</div>` +
             `<div class="tt-row"><span>金額</span><span class="v">${nt(v)}</span></div>` +
             `<div class="tt-row"><span>佔當月</span><span class="v">${pct}%</span></div>`);
           return;
@@ -439,9 +446,9 @@
         const rows = series.map((s, si) => {
           const v = m.by[s] || 0;
           if (v <= 0) return "";
-          return `<div class="tt-row"><span><i class="swatch" style="background:${color(si)}"></i> ${s}</span><span class="v">${nt(v)}</span></div>`;
+          return `<div class="tt-row"><span><i class="swatch" style="background:${color(si)}"></i> ${esc(s)}</span><span class="v">${nt(v)}</span></div>`;
         }).join("");
-        showTip(evt, `<div class="tt-title">${m.month}・${nt(m.total)}（${m.count} 張）</div>${rows}`);
+        showTip(evt, `<div class="tt-title">${esc(m.month)}・${nt(m.total)}（${m.count} 張）</div>${rows}`);
       });
       hit.addEventListener("mouseleave", hideTip);
       hit.style.cursor = "pointer";
@@ -460,8 +467,8 @@
   mTable.append(el("summary", null, "以表格檢視"));
   const mtWrap = el("div", "scrollx");
   mtWrap.innerHTML = "<table><tr><th>月份</th>" +
-    series.map(s => `<th class="num">${s}</th>`).join("") + '<th class="num">合計</th></tr>' +
-    months.map(m => `<tr><td>${m.month}</td>` +
+    series.map(s => `<th class="num">${esc(s)}</th>`).join("") + '<th class="num">合計</th></tr>' +
+    months.map(m => `<tr><td>${esc(m.month)}</td>` +
       series.map(s => `<td class="num">${Math.round(m.by[s] || 0).toLocaleString("zh-TW")}</td>`).join("") +
       `<td class="num">${Math.round(m.total).toLocaleString("zh-TW")}</td></tr>`).join("") +
     "</table>";
@@ -646,15 +653,15 @@
       const hit = svgEl("rect", { x: 0, y: yTop, width: W, height: rowH,
         fill: "transparent" });
       hit.addEventListener("mousemove", evt => showTip(evt,
-        `<div class="tt-title">${r.label}</div>` +
-        (r.legal ? `<div class="tt-row"><span>公司名</span><span class="v">${r.legal}</span></div>` : "") +
-        (r.sub ? `<div class="tt-row"><span>分類</span><span class="v">${r.sub}</span></div>` : "") +
-        (r.industry ? `<div class="tt-row"><span>稅籍行業</span><span class="v">${r.industry}</span></div>` : "") +
+        `<div class="tt-title">${esc(r.label)}</div>` +
+        (r.legal ? `<div class="tt-row"><span>公司名</span><span class="v">${esc(r.legal)}</span></div>` : "") +
+        (r.sub ? `<div class="tt-row"><span>分類</span><span class="v">${esc(r.sub)}</span></div>` : "") +
+        (r.industry ? `<div class="tt-row"><span>稅籍行業</span><span class="v">${esc(r.industry)}</span></div>` : "") +
         `<div class="tt-row"><span>金額</span><span class="v">${nt(r.value)}</span></div>` +
         `<div class="tt-row"><span>筆數</span><span class="v">${r.count}</span></div>` +
         (r.topItems && r.topItems.length
-          ? `<div class="tt-row"><span>常買</span><span class="v">${r.topItems.join("、")}</span></div>` : "") +
-        (r.address ? `<div class="tt-row"><span>地址</span><span class="v">${r.address}</span></div>` : "")));
+          ? `<div class="tt-row"><span>常買</span><span class="v">${esc(r.topItems.join("、"))}</span></div>` : "") +
+        (r.address ? `<div class="tt-row"><span>地址</span><span class="v">${esc(r.address)}</span></div>` : "")));
       hit.addEventListener("mouseleave", hideTip);
       if (r.q) {
         hit.style.cursor = "pointer";
@@ -679,7 +686,7 @@
     wrapT.innerHTML = "<table><tr><th>日期</th><th>店家</th><th>分類</th>" +
       '<th class="num">金額</th><th></th></tr>' +
       recent.map(u =>
-        `<tr><td>${u.date}</td><td>${u.seller}</td><td>${u.category}</td>` +
+        `<tr><td>${esc(u.date)}</td><td>${esc(u.seller)}</td><td>${esc(u.category)}</td>` +
         `<td class="num">${Math.round(u.amount).toLocaleString("zh-TW")}</td>` +
         `<td>${mapA(u.seller)}</td></tr>`).join("") +
       "</table>";
@@ -708,15 +715,15 @@
     const wrapT = el("div", "scrollx");
     wrapT.innerHTML = '<datalist id="cats">' +
       D.categories.filter(c => c.name !== "未分類")
-        .map(c => `<option value="${c.name}">`).join("") + "</datalist>" +
+        .map(c => `<option value="${esc(c.name)}">`).join("") + "</datalist>" +
       '<table><tr><th>店家</th><th>稅籍行業</th><th>常買品項</th>' +
       '<th class="num">金額</th><th class="num">筆數</th><th>分類</th>' +
       (SERVE ? "<th>招牌名</th>" : "") + "<th></th><th></th></tr>" +
       D.uncategorized.map((s, i) =>
-        `<tr><td>${s.name}<div><a class="map" href="query.html?seller=${
+        `<tr><td>${esc(s.name)}<div><a class="map" href="query.html?seller=${
           encodeURIComponent(s.name)}">查這家</a></div></td>` +
-        `<td>${s.industry || "—"}</td>` +
-        `<td>${(s.topItems || []).slice(0, 2).join("、") || "—"}</td>` +
+        `<td>${s.industry ? esc(s.industry) : "—"}</td>` +
+        `<td>${esc((s.topItems || []).slice(0, 2).join("、")) || "—"}</td>` +
         `<td class="num">${Math.round(s.total).toLocaleString("zh-TW")}</td>` +
         `<td class="num">${s.count}</td>` +
         `<td><input class="catin" data-i="${i}" list="cats" placeholder="分類"></td>` +

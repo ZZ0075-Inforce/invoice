@@ -1,0 +1,53 @@
+#app
+  header
+    h1  "twcrawl 查詢頁"
+    div.sub
+      a.map  "← 回儀表板"
+      a.map  "🛡 食安頁"
+      a.map  "🗺 消費地圖"
+    button.theme  "🌗 自動"
+  div.chips
+    button.chip  "發票清單"
+    button.chip  "店家查詢"
+    button.chip.on  "固定支出"
+  div
+    div.card
+      h2  "固定支出"
+      div.desc  "同一店家、金額相近、月級以上週期（含雙月、年繳）且至少出現 3 次。偵測是提示，不代表存在契約；高頻日常（如手搖飲）依定義不列入。"
+      div.tiles
+        div.tile
+          div.label  "每月固定燒"
+          div.value  "NT$588"
+          div.delta  "進行中項目的月化合計"
+        div.tile
+          div.label  "進行中"
+          div.value  "1 項"
+        div.tile
+          div.label  "疑似已停"
+          div.value  "0 項"
+          div.delta  "超過 1.6 個週期沒再出現"
+      div.scrollx
+        table
+          tbody
+            tr
+              th  "店家"
+              th.num  "單筆金額"
+              th  "週期"
+              th.num  "次數"
+              th  "首次"
+              th  "最近"
+              th  "下次預估"
+              th  "狀態"
+              th.num  "月化金額"
+            tr
+              td
+                button.linkish  "測試電信"
+              td.num  "599"
+              td  "每月"
+              td.num  "3"
+              td  "2026-03-05"
+              td  "2026-05-05"
+              td  "2026-06-05"
+              td.ok  "進行中"
+              td.num  "588"
+  div.note  "資料截至 2026-07-31 09:00・全部在本機運算、不外連（docs/adr/0002）・品項與發票號碼只存在本機 data.js"

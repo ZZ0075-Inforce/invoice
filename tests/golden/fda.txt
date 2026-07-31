@@ -1,0 +1,35 @@
+#app
+  header
+    h1  "食安頁（FDA 比對）"
+    div.sub
+      a.map  "← 回儀表板"
+      a.map  "🔍 查詢頁"
+      a.map  "🗺 消費地圖"
+    button.theme  "🌗 自動"
+  div.chips
+    button.chip  "總覽"
+    button.chip  "中聯油脂案"
+    button.chip.on  "國內回收公告"
+  div
+    div.card
+      h2  "國內回收公告"
+        span.kind  "監測"
+      div.stat  "清單 4 筆・最後更新 2026-07-25・命中 1 筆"
+      div.scrollx
+        table
+          tbody
+            tr
+              th  "日期"
+              th  "層級"
+              th  "發票端"
+              th  "FDA 端"
+              th  "發票號碼"
+            tr
+              td  "2026-03-12"
+              td  "品項"
+              td  "雞蛋"
+              td  "測試品名雞蛋"
+              td
+                a.map  "AA2"
+      div.note  "⚠ 命中≠買到問題商品，判讀基準見總覽分頁。點發票號碼到查詢頁看該張完整品項。"
+  div.note  "資料截至 2026-07-31 09:00・全部在本機、不外連（docs/adr/0001）・完整命中欄位在 out/match_report.csv"
