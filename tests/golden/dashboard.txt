@@ -16,6 +16,13 @@
       div.delta
         a.map  "看該月發票"
     div.tile
+      div.label  "本月預算已用（6月）"
+      div.value  "45%"
+      div.delta.good  "NT$360／NT$800（剩 NT$440）"
+      div.delta  "4 個月中 2 個月超總額"
+      div.delta.bad  "非必要 NT$60／上限 NT$50（超 NT$10）"
+      div.delta  "4 個月中 2 個月破上限"
+    div.tile
       div.label  "月均支出"
       div.value  "NT$692"
       div.delta  "4 個月・共 9 張發票"

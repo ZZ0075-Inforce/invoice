@@ -2,7 +2,7 @@
 .secrets/
 state/
 captures/
-categories.local.json
+*.local.json
 *.sqlite
 *.sqlite-journal
 *.db

@@ -52,6 +52,10 @@ class Workspace:
         return self.root / "categories.local.json"
 
     @property
+    def budget(self) -> Path:
+        return self.root / "budget.local.json"
+
+    @property
     def backup(self) -> Path:
         return self.out / "backup"
 

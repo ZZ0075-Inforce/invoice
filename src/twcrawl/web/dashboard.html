@@ -233,6 +233,36 @@ TW.page({
               Number(lot.next.drawDate.slice(5, 7))}/${
               Number(lot.next.drawDate.slice(8))} 開獎</div>` : "") },
   ];
+  // ---- 預算磚（issue #12）：有設定才出現。預算是分析視角不是契約，
+  // 所有月份一律以「現行」預算對照；達成率在這裡組裝（月合計＋非必要
+  // 旗標都是既有 payload），匯出端只出設定值。金額只在本機 data.js。
+  if (D.budget && (D.budget.monthly || D.budget.unnecessary)) {
+    const b = D.budget;
+    const unnByM = ui.monthTotals(unnecessary, D.months);
+    const curUnn = unnByM[unnByM.length - 1].v;
+    const gauge = (used, cap) => used <= cap
+      ? `剩 ${nt(cap - used)}` : `超 ${nt(used - cap)}`;
+    const lines = [];
+    let pct;
+    if (b.monthly) {
+      pct = last.total / b.monthly * 100;
+      lines.push(`<div class="delta ${last.total <= b.monthly ? "good" : "bad"}">` +
+        `${nt(last.total)}／${nt(b.monthly)}（${gauge(last.total, b.monthly)}）</div>`);
+      const over = months.filter(m => m.total > b.monthly).length;
+      if (months.length > 1) lines.push(`<div class="delta">${over
+        ? `${months.length} 個月中 ${over} 個月超總額` : "各月都在總額內"}</div>`);
+    }
+    if (b.unnecessary) {
+      if (pct === undefined) pct = curUnn / b.unnecessary * 100;
+      lines.push(`<div class="delta ${curUnn <= b.unnecessary ? "good" : "bad"}">` +
+        `非必要 ${nt(curUnn)}／上限 ${nt(b.unnecessary)}（${gauge(curUnn, b.unnecessary)}）</div>`);
+      const over = unnByM.filter(x => x.v > b.unnecessary).length;
+      if (unnByM.length > 1) lines.push(`<div class="delta">${over
+        ? `${unnByM.length} 個月中 ${over} 個月破上限` : "各月都在上限內"}</div>`);
+    }
+    tileDefs.splice(1, 0, { label: `本月預算已用（${mLabel(last)}）`,
+      value: Math.round(pct) + "%", extra: lines.join("") });
+  }
   for (const t of tileDefs) {
     const tile = el("div", "tile");
     tile.append(el("div", "label", t.label), el("div", "value", t.value));

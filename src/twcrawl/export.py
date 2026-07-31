@@ -125,6 +125,44 @@ def _load_slots(path: Path) -> dict[str, int]:
 
 # 固定支出的判準。查詢頁把這些數字寫進說明文案，所以由 payload 帶過去——
 # 以前門檻在這裡、文案在 query.html，改了門檻文案不會跟著改。
+def load_budget(path: Path) -> dict | None:
+    """讀預算設定（budget.local.json）；沒有檔或空設定回 None → payload 無
+    budget 區塊 → 儀表板無磚。
+
+    預算金額是個資（ADR-0001）：檔案在 .gitignore、錯誤訊息只印鍵名不印值。
+    防呆比照 categories.load_local_config——手貼 JSON 壞掉時給人話而非
+    traceback。只有兩個合法鍵，打錯字（montly）若被靜默忽略，磚會無聲消失，
+    所以不認得的鍵直接報錯。
+    """
+    if not path.exists():
+        return None
+    try:
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise SystemExit(
+            f"{path} 第 {e.lineno} 行第 {e.colno} 欄有語法錯誤：{e.msg}\n"
+            "常見原因：多了／少了逗號、引號沒關。正確格式範例：\n"
+            '{ "monthly": 25000, "unnecessary": 3000 }') from None
+    if not isinstance(cfg, dict):
+        raise SystemExit(f"{path} 最外層要是物件（{{...}}）。")
+    unknown = set(cfg) - {"monthly", "unnecessary"}
+    if unknown:
+        raise SystemExit(
+            f"{path} 有不認得的鍵：{'、'.join(sorted(unknown))}——只收 "
+            "monthly（每月總額）與 unnecessary（非必要消費上限）。")
+    out: dict[str, float | None] = {}
+    for key, label in (("monthly", "每月總額"),
+                       ("unnecessary", "非必要消費上限")):
+        v = cfg.get(key)
+        if v is None:
+            out[key] = None
+        elif isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+            raise SystemExit(f"{path} 的 {key}（{label}）要是正數金額。")
+        else:
+            out[key] = float(v)
+    return out if any(v is not None for v in out.values()) else None
+
+
 FIXED_RULE = {
     "minCount": 3,        # 至少出現幾次才算規律
     "tolAbs": 15,         # 金額相近：±max(tolAbs 元, tolPct%)
@@ -343,7 +381,7 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
         key=lambda s: -s["total"],
     )[:15]
 
-    return {
+    payload = {
         "generatedAt": _dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
         "invoiceCount": len(invs),
         "invoices": invoice_rows,
@@ -358,6 +396,13 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
                                   key=lambda s: (s["kind"] != "事件", s["label"]))},
         "lottery": lottery,
     }
+    # 預算（issue #12）：沒設定就沒有這個鍵——「無磚」由鍵的有無決定，
+    # 不用空物件（{} 在 JS 是 truthy，會讓磚以空狀態出現）。達成率由頁面
+    # 以既有的月合計與非必要旗標組裝，這裡只出設定值。
+    budget = load_budget(ws.budget)
+    if budget:
+        payload["budget"] = budget
+    return payload
 
 
 def write_export(conn, ws: Workspace, classifier: Classifier,

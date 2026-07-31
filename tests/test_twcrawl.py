@@ -1645,6 +1645,49 @@ def test_local_rules_validation():
     print("✓ 規則檔防呆：語法錯（含行號）、重複鍵、型別錯都給人話")
 
 
+def test_budget_loader_guards():
+    """budget.local.json 防呆（issue #12）：壞檔給人話、訊息不印金額值。"""
+    from twcrawl.export import load_budget
+
+    with TemporaryDirectory() as td:
+        p = Path(td) / "budget.local.json"
+        assert load_budget(p) is None, "沒有檔案就是沒有預算，不是錯誤"
+        for text in ("{}", '{"monthly": null}',
+                     '{"monthly": null, "unnecessary": null}'):
+            p.write_text(text, encoding="utf-8")
+            assert load_budget(p) is None, f"空設定 {text} 該回 None（無磚）"
+
+        p.write_text('{"monthly": 25000}', encoding="utf-8")
+        assert load_budget(p) == {"monthly": 25000.0, "unnecessary": None}
+        p.write_text('{"unnecessary": 3000.5}', encoding="utf-8")
+        assert load_budget(p) == {"monthly": None, "unnecessary": 3000.5}, \
+            "兩者可只設其一"
+
+        bad = [
+            ("[]", "最外層"),
+            ('{"montly": 1}', "不認得的鍵"),      # 打錯字不能靜默變成沒設定
+            ('{"monthly": -1}', "正數"),
+            ('{"monthly": 0}', "正數"),
+            ('{"monthly": true}', "正數"),        # bool 是 int 的子類，要擋
+            ('{"monthly": "25000"}', "正數"),
+        ]
+        for text, want in bad:
+            p.write_text(text, encoding="utf-8")
+            try:
+                load_budget(p)
+                raise AssertionError(f"{text} 該報錯卻通過")
+            except SystemExit as e:
+                assert want in str(e), (text, str(e))
+
+        p.write_text('{\n "monthly": 800,\n}', encoding="utf-8")
+        try:
+            load_budget(p)
+            raise AssertionError("語法錯該報錯卻通過")
+        except SystemExit as e:
+            assert "語法錯誤" in str(e) and "第 2 行" in str(e), str(e)
+    print("✓ 預算檔防呆：語法錯（含行號）、未知鍵、型別錯、非正數都給人話")
+
+
 def test_export_match_details():
     from twcrawl import export
     from twcrawl.categories import Classifier
@@ -2098,6 +2141,9 @@ def a_payload(**overrides) -> dict:
             "next": {"label": "115年05-06月", "drawDate": "2026-09-25",
                      "pending": 5},
         },
+        # 預算磚可心算：6月 360/800=45%（剩 440）、3月 849 與 5月 899 超總額；
+        # 非必要 4月/6月各 60 都破上限 50（本月超 10）
+        "budget": {"monthly": 800.0, "unnecessary": 50.0},
     }
     payload.update(overrides)
     return payload
@@ -2470,6 +2516,50 @@ def test_dashboard_trend_hover_tooltip():
     print("✓ 分類趨勢圖：hover tooltip 顯示月份・分類・金額；單月不畫趨勢卡")
 
 
+def test_dashboard_budget_tile():
+    """預算磚（issue #12）：有設定才出現、對照現行預算、兩者可只設其一。
+
+    fixture：6月 360／總額 800（45%、剩 440）、3月 849 與 5月 899 超總額；
+    非必要 4月/6月各 60、上限 50（本月超 10、兩個月破上限）。
+    """
+    from twcrawl.workspace import Workspace
+
+    js = """() => {
+      const t = [...document.querySelectorAll(".tile")]
+        .find(x => x.textContent.includes("預算"));
+      return t ? { value: t.querySelector(".value").textContent,
+                   text: t.innerText } : null;
+    }"""
+    variants = [
+        ("雙預算", a_payload(), "45%",
+         ["剩 NT$440", "4 個月中 2 個月超總額",
+          "非必要 NT$60／上限 NT$50（超 NT$10）", "4 個月中 2 個月破上限"]),
+        ("只設上限", a_payload(budget={"monthly": None, "unnecessary": 50.0}),
+         "120%", ["非必要 NT$60／上限 NT$50（超 NT$10）"]),
+        ("無設定", a_payload(budget=None), None, []),
+    ]
+    with TemporaryDirectory() as td:
+        ws = Workspace(Path(td))
+        with browser_context(session_file=None, headed=False) as ctx:
+            _stub_tiles(ctx)
+            for label, payload, value, wants in variants:
+                out = _stage_pages(ws, payload)
+                page, errs = _open(ctx, out, "dashboard.html")
+                assert not errs, f"dashboard（{label}）：{errs}"
+                r = page.evaluate(js)
+                if value is None:
+                    assert r is None, f"{label}：沒設定不該有預算磚——{r}"
+                else:
+                    assert r is not None, f"{label}：預算磚沒出現"
+                    assert r["value"] == value, (
+                        f"{label}：磚值該是 {value}，實得 {r['value']!r}")
+                    for want in wants:
+                        assert want in r["text"], (
+                            f"{label}：磚上少了「{want}」——實得 {r['text']!r}")
+                page.close()
+    print("✓ 預算磚：雙預算 45%＋各月超標數、只設上限 120%、沒設定就沒磚")
+
+
 def test_payload_contract():
     """a_payload() 的形狀必須跟 export.build_payload 一致，手打的 fixture 才漂不掉。"""
     from twcrawl import export, lottery
@@ -2503,6 +2593,9 @@ def test_payload_contract():
             "﻿level,inv_num,inv_date,invoice_side,fda_side,source\n"
             "店家,AA2,2026-03-12,測試超市,測試超市股份有限公司,edible_oil\n",
             encoding="utf-8")
+        # 有設定 → payload 有 budget 鍵，形狀才對得上 a_payload
+        ws.budget.write_text('{"monthly": 800, "unnecessary": 50}',
+                             encoding="utf-8")
         conn = db.connect(ws.db)
         try:
             # 四個月、電信 599×3 → 固定支出；未分類店家 → uncategorized；

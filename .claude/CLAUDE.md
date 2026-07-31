@@ -16,7 +16,7 @@ FDA 目前接三個來源：中聯油脂案專區強制下架清單（edible_oil
 ```
 pip install -e .                      # 一律 editable；PyPI 上的 twcrawl 是無關的舊套件
 python -m playwright install chromium # playwright 指令找不到時用這個
-python tests/test_twcrawl.py          # 測試（52/52，不用 pytest）
+python tests/test_twcrawl.py          # 測試（54/54，不用 pytest）
 python tests/test_twcrawl.py --update-golden   # 有意改動四頁畫面後重生 tests/golden/
 
 # 每月例行（一鍵；fetch 區間自動推算、FDA 回溯 90 天只給 feed 型來源）
@@ -163,7 +163,11 @@ src/twcrawl/
 │                 載具號碼、raw 永不進 data.js，ADR-0002；fda.sources 歸戶：match
 │                 報告的 source 欄是 source_url，反查 SOURCES 得名稱，FDA_SOURCE_META
 │                 給顯示名/型態、未知來源後備「名稱＋事件」；_detect_fixed 固定支出
-│                 偵測也在這——月報磚與查詢頁視圖同源；分類色槽 assign_slots
+│                 偵測也在這——月報磚與查詢頁視圖同源；load_budget 讀
+│                 budget.local.json（monthly／unnecessary 皆選填正數，未知鍵
+│                 直接報錯——只有兩個合法鍵，打錯字被靜默忽略磚會無聲消失；
+│                 沒設定→payload 無 budget 鍵→無磚，錯誤訊息只印鍵名不印
+│                 金額值）；分類色槽 assign_slots
 │                 在這指派並持久化 state/catslots.json（在榜沿用、新進取空槽、
 │                 槽滿只收落榜者），payload 帶 categories[].slot，頁面只讀——
 │                 跨次匯出同分類同色，未分類永遠中性灰）
@@ -474,6 +478,16 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   不畫趨勢卡；樣式探針補 .trend 三選擇器。兩軸 review 後補修四件：
   探針、單月測試、「其他」格拿掉點擊、命名（.t→.head、mT2→padT）。
   測試 51→52
+- ✅ 預算磚（2026-08-01，issue #12）：工作區放 `budget.local.json`
+  （`{"monthly": 25000, "unnecessary": 3000}`，皆選填正數）→ 儀表板出
+  預算磚；沒設定就沒有 payload 鍵、沒有磚（刻意不出空狀態提示，PRD
+  story 5）。預算是分析視角不是契約：所有月份一律以現行預算對照，磚上
+  本月 剩/超 ＋「N 個月中 M 個月超總額/破上限」。載入器在 export
+  （`load_budget`），防呆比照規則檔（語法錯含行號、未知鍵、非正數；訊息
+  只印鍵名不印值——金額是個資）；.gitignore 的 categories.local.json 改成
+  `*.local.json` 一併蓋住。達成率由頁面以月合計＋非必要旗標組裝，匯出端
+  只出設定值（衍生歸一界線）。測試 52→54（載入器防呆＋磚三變體：雙預算
+  45%、只設上限 120%、無設定無磚）
 - ⬜ 緩辦（要做先問）：CSV 匯出（分類趨勢圖已做＝#11；地圖店家搜尋立案為 #15）
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive
