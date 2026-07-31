@@ -14,7 +14,10 @@ from typing import Any, Iterable, NamedTuple
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS invoices (
-    inv_num      TEXT PRIMARY KEY,
+    -- NOT NULL 不是裝飾：SQLite 的 NULL 不受主鍵唯一性約束（理由見 _require_key，
+    -- invoice_items 本來就宣告了）。既存的資料庫不會被這行補上——CREATE IF NOT
+    -- EXISTS 不動既存表，所以真正擋住所有資料庫的是 _require_key。
+    inv_num      TEXT PRIMARY KEY NOT NULL,
     inv_date     TEXT,
     seller_name  TEXT,
     seller_ban   TEXT,
@@ -222,6 +225,23 @@ def set_biz_location(conn: sqlite3.Connection, ban: str,
         " where ban=?", (lat, lon, ban))
 
 
+def _require_key(row: dict[str, Any], key: str, table: str) -> None:
+    """主鍵欄缺值就當場停下來，不要寫出一列 NULL 主鍵。
+
+    這裡擋的是**鍵名打錯**：upsert 是 `{k: r.get(k) for k in _INVOICE_KEYS}`，
+    多餘的鍵靜靜被丟掉，於是 `{"invNum": ...}` 會寫進一列號碼是 NULL 的發票，
+    而 NULL 在 SQLite 不受主鍵唯一性約束——同一列 upsert 三次就是三列，正好
+    違反本模組「重跑安全」的承諾，且全程無聲。
+
+    訊息印**鍵名**不印值：值是消費紀錄（CLAUDE.md 個資界線）。
+    """
+    v = row.get(key)
+    if v is None or (isinstance(v, str) and not v.strip()):
+        raise ValueError(
+            f"{table} 這列的 {key} 是空的；這列實際帶的鍵是 {sorted(row)}"
+            f"——鍵名打錯會被 upsert 靜默丟掉，寫出 NULL 主鍵列")
+
+
 def upsert_invoices(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> int:
     sql = """
     INSERT INTO invoices (inv_num, inv_date, seller_name, seller_ban, amount,
@@ -240,16 +260,21 @@ def upsert_invoices(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) ->
     """
     n = 0
     for r in rows:
+        _require_key(r, "inv_num", "invoices")
         conn.execute(sql, {k: r.get(k) for k in _INVOICE_KEYS})
         n += 1
     conn.commit()
     return n
 
 
+# 一列的鍵就是 upsert 的 interface（多的靜靜丟掉、少的存成 NULL），所以由
+# test_db_row_shape_is_pinned 對「表欄位」與「測試建構器」三方釘住。
 _INVOICE_KEYS = (
     "inv_num inv_date seller_name seller_ban amount card_type card_no "
     "inv_status inv_period donatable source raw"
 ).split()
+
+_ITEM_KEYS = "inv_num row_no description quantity unit_price amount raw".split()
 
 
 def upsert_items(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> int:
@@ -266,13 +291,11 @@ def upsert_items(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> in
     """
     n = 0
     for r in rows:
-        conn.execute(
-            sql,
-            {
-                k: r.get(k)
-                for k in ("inv_num row_no description quantity unit_price amount raw").split()
-            },
-        )
+        # invoice_items 兩個主鍵欄都宣告了 NOT NULL，所以打錯鍵本來就會炸；
+        # 這裡先擋是為了把 IntegrityError 換成指得出「你打錯哪個鍵」的訊息
+        _require_key(r, "inv_num", "invoice_items")
+        _require_key(r, "row_no", "invoice_items")
+        conn.execute(sql, {k: r.get(k) for k in _ITEM_KEYS})
         n += 1
     conn.commit()
     return n

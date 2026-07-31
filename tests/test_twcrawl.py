@@ -131,6 +131,49 @@ def _serve(style: str = "postback") -> tuple[HTTPServer, str]:
     return srv, f"http://127.0.0.1:{srv.server_port}/"
 
 
+# ------------------------------------------------------- 資料庫測試資料 --
+#
+# 發票／品項一列的形狀只定義在 db._INVOICE_KEYS／_ITEM_KEYS——那是 upsert 的
+# interface（多的鍵靜靜丟掉、少的存成 NULL），手打字面漂掉不會有人發現：
+# 這兩個建構器出現之前，32 個 invoice 字面長出五種鍵組合，有的帶 source／raw
+# 有的不帶（兩欄沒有任何讀取端，純噪音）。
+#
+# 建構器只做兩件事：填四個「每個測試都在講」的欄位、擋下 _INVOICE_KEYS 以外
+# 的鍵。第二件才是重點——鍵名打錯（invNum）會被 upsert 丟掉，寫出一列 NULL
+# 主鍵的發票。三方一致由 test_db_row_shape_is_pinned 釘住。
+
+def an_invoice(inv_num: str, inv_date: str = "2026-05-01",
+               seller_name: str = "測試商行", amount: float = 100.0,
+               **extra) -> dict:
+    """一列 invoices 測試資料。四個「每個測試都在講」的欄位給位置參數，
+    其餘走 **extra（seller_ban／card_no／source／raw…）。
+
+    參數名一律等於欄位名：名字不一致的話，`an_invoice("AA1", seller_name="X")`
+    會走進 **extra 再靠 dict 合併順序蓋掉位置參數——結果對，但是靠運氣對。
+    """
+    row = {"inv_num": inv_num, "inv_date": inv_date,
+           "seller_name": seller_name, "amount": amount, **extra}
+    _reject_unknown(row, db._INVOICE_KEYS, "an_invoice")
+    return row
+
+
+def an_item(inv_num: str, row_no: int, description: str,
+            amount: float = 100.0, **extra) -> dict:
+    """一列 invoice_items 測試資料（參數名同樣等於欄位名）。"""
+    row = {"inv_num": inv_num, "row_no": row_no, "description": description,
+           "amount": amount, **extra}
+    _reject_unknown(row, db._ITEM_KEYS, "an_item")
+    return row
+
+
+def _reject_unknown(row: dict, known, who: str) -> None:
+    bad = sorted(set(row) - set(known))
+    if bad:
+        raise AssertionError(
+            f"{who}：{bad} 不是資料庫欄位，upsert 會靜默丟掉它們。"
+            f"可用的鍵：{sorted(known)}")
+
+
 # ------------------------------------------------------------- 測試項目 --
 
 def test_table_extraction_and_pagination():
@@ -643,33 +686,23 @@ def test_match_invoices_against_fda():
         conn = db.connect(Path(d) / "m.sqlite")
         try:
             db.upsert_invoices(conn, [
-                {"inv_num": "AA11111111", "inv_date": "2026-05-01",
-                 "seller_name": "測試商行一店", "amount": 100.0,
-                 "source": "t", "raw": "{}"},   # 未分類（零售視角）→ 品項參與比對
-                {"inv_num": "BB22222222", "inv_date": "2026-01-01",  # since 之前，應排除
-                 "seller_name": "測試商行", "amount": 50.0,
-                 "source": "t", "raw": "{}"},
-                {"inv_num": "CC33333333", "inv_date": "2026-05-02",
-                 "seller_name": "巷口快炒小吃店", "amount": 120.0,  # 餐飲現調 → 濾品項
-                 "source": "t", "raw": "{}"},
-                {"inv_num": "DD44444444", "inv_date": "2026-05-03",
-                 "seller_name": "測試商行二店", "amount": 80.0,
-                 "source": "t", "raw": "{}"},   # 上榜通路但品項無交集 → 排除
-                {"inv_num": "EE55555555", "inv_date": "2026-05-04",
-                 "seller_name": "測試商行三店", "amount": 90.0,
-                 "source": "t", "raw": "{}"},   # 上榜通路且無明細 → 保留＋註記
+                # 未分類（零售視角）→ 品項參與比對
+                an_invoice("AA11111111", "2026-05-01", "測試商行一店", 100.0),
+                # since 之前，應排除
+                an_invoice("BB22222222", "2026-01-01", "測試商行", 50.0),
+                # 餐飲現調 → 濾品項
+                an_invoice("CC33333333", "2026-05-02", "巷口快炒小吃店", 120.0),
+                # 上榜通路但品項無交集 → 排除
+                an_invoice("DD44444444", "2026-05-03", "測試商行二店", 80.0),
+                # 上榜通路且無明細 → 保留＋註記
+                an_invoice("EE55555555", "2026-05-04", "測試商行三店", 90.0),
             ])
             db.upsert_items(conn, [
-                {"inv_num": "AA11111111", "row_no": 1, "description": "特級沙拉油",
-                 "amount": 100.0, "raw": "[]"},
-                {"inv_num": "AA11111111", "row_no": 2, "description": "230",  # 純數字
-                 "amount": 230.0, "raw": "[]"},
-                {"inv_num": "AA11111111", "row_no": 3, "description": "苦茶油",
-                 "amount": 500.0, "raw": "[]"},
-                {"inv_num": "CC33333333", "row_no": 1, "description": "蝦仁蛋炒飯",
-                 "amount": 120.0, "raw": "[]"},   # 快炒店菜名撞即食包品名
-                {"inv_num": "DD44444444", "row_no": 1, "description": "抽取式衛生紙",
-                 "amount": 80.0, "raw": "[]"},    # 與該業者下架產品無交集
+                an_item("AA11111111", 1, "特級沙拉油", 100.0),
+                an_item("AA11111111", 2, "230", 230.0),           # 純數字
+                an_item("AA11111111", 3, "苦茶油", 500.0),
+                an_item("CC33333333", 1, "蝦仁蛋炒飯", 120.0),    # 菜名撞即食包品名
+                an_item("DD44444444", 1, "抽取式衛生紙", 80.0),   # 與下架清單無交集
             ])
             db.upsert_fda_rows(conn, [
                 {"row_hash": "h1", "source_url": "u1", "table_key": "t", "page_no": 1,
@@ -724,28 +757,32 @@ def test_db_upsert_is_idempotent():
         # Windows 不允許刪除仍被開啟的檔案：連線必須在暫存目錄清理前關閉
         conn = db.connect(Path(d) / "t.sqlite")
         try:
-            rows = [{"inv_num": "AB12345678", "inv_date": "2024-05-03",
-                     "seller_name": "測試", "amount": 100.0, "source": "t", "raw": "{}"}]
+            rows = [an_invoice("AB12345678", "2024-05-03", "測試", raw="{}")]
             db.upsert_invoices(conn, rows)
             db.upsert_invoices(conn, rows)
             n = conn.execute("SELECT COUNT(*) FROM invoices").fetchone()[0]
             assert n == 1, f"重複匯入應維持 1 筆，實得 {n}"
 
-            items = [{"inv_num": "AB12345678", "row_no": 1, "description": "x",
-                      "amount": 100.0, "raw": "[]"}]
+            items = [an_item("AB12345678", 1, "x")]
             db.upsert_items(conn, items)
             db.upsert_items(conn, items)
             n = conn.execute("SELECT COUNT(*) FROM invoice_items").fetchone()[0]
             assert n == 1, f"明細重複匯入應維持 1 筆，實得 {n}"
 
             # COALESCE 不變式：後來的部分抓取不得抹掉已知欄位。這條只寫在
-            # upsert_invoices 的 SQL 裡，以前沒有測試——而 raw 是刻意的例外
+            # upsert_invoices 的 SQL 裡，以前沒有測試——而 raw 是刻意的例外。
+            # 這裡刻意不用 an_invoice()：建構器會補上日期與店家，正好蓋掉
+            # 這個測試要問的事（「只帶號碼」的後續 upsert 會發生什麼）
             db.upsert_invoices(conn, [{"inv_num": "AB12345678"}])
             got = db.invoices(conn)
             assert len(got) == 1, \
                 f"只帶號碼的後續 upsert 抹掉了 inv_date（COALESCE 不變式）：{got}"
             assert got[0].seller == "測試" and got[0].amount == 100.0, \
                 f"只帶號碼的後續 upsert 不該抹掉店家與金額：{got[0]}"
+            # raw 的例外也釘住：它在 SQL 裡沒有 COALESCE，之前只寫在註解裡
+            assert conn.execute(
+                "select raw from invoices").fetchone()[0] is None, \
+                "raw 是刻意的例外：後續 upsert 應以新值（含 NULL）覆蓋"
 
             b = [{"ban": "12345678", "name": "測試商行",
                   "address": "測試市測試路 1 號", "industry": "餐館", "codes": "56"}]
@@ -762,6 +799,131 @@ def test_db_upsert_is_idempotent():
             assert db.biz_registry(conn)[0].lat == 25.0, \
                 "重抓對照表不得洗掉已解出的座標"
             print("✓ SQLite upsert 具冪等性、COALESCE 不抹既有值、座標不被對照表覆蓋")
+        finally:
+            conn.close()
+
+
+def test_db_row_shape_is_pinned():
+    """一列的鍵就是 upsert 的 interface——三方必須一致。
+
+    以前只有 db._INVOICE_KEYS 一份定義，沒有任何斷言：新增欄位卻忘了補進
+    常數，那一欄就永遠寫不進去，而且靜悄悄（upsert 讀不到的鍵存成 NULL）。
+    """
+    with TemporaryDirectory() as d:
+        conn = db.connect(Path(d) / "shape.sqlite")
+        try:
+            for table, keys, build in (
+                ("invoices", db._INVOICE_KEYS, db.upsert_invoices),
+                ("invoice_items", db._ITEM_KEYS, db.upsert_items),
+            ):
+                types = {r[1]: r[2] for r in
+                         conn.execute(f"PRAGMA table_info({table})")}
+                # ① 表欄位 == 常數（fetched_at 由資料庫自填，不由呼叫端給）
+                assert set(types) - {"fetched_at"} == set(keys), (
+                    f"{table} 的欄位與常數漂了——表多了 "
+                    f"{sorted(set(types) - {'fetched_at'} - set(keys))}、"
+                    f"常數多了 {sorted(set(keys) - set(types))}")
+                # ② 每個鍵都真的寫得進去：全欄位塞值，讀回不該有 NULL。
+                #    這條抓的是「常數有這個鍵，但 INSERT 的 SQL 沒綁它」
+                row = {k: (1 if types[k] in ("REAL", "INTEGER") else f"<{k}>")
+                       for k in keys}
+                build(conn, [row])
+                got = dict(conn.execute(f"select * from {table}").fetchone())
+                blank = sorted(k for k in keys if got[k] is None)
+                assert not blank, f"{table} 的 {blank} 沒被寫進去（SQL 漏綁？）"
+
+            # ③ 建構器只吐得出欄位內的鍵，未知鍵當場擋下
+            assert set(an_invoice("AA1")) <= set(db._INVOICE_KEYS)
+            assert set(an_item("AA1", 1, "x")) <= set(db._ITEM_KEYS)
+            # 兩個都是會真的發生的打錯法：payload 那邊叫 price／seller，
+            # 從頁面那側複製過來就會寫成這樣
+            for bad in (lambda: an_invoice("AA1", seller="測試商行"),
+                        lambda: an_item("AA1", 1, "x", price=60.0)):
+                try:
+                    bad()
+                except AssertionError as e:
+                    assert "不是資料庫欄位" in str(e), e
+                else:
+                    raise AssertionError("建構器應擋下不存在的欄位名")
+            print("✓ 資料庫列形狀：表欄位、_INVOICE_KEYS／_ITEM_KEYS、建構器三方一致")
+        finally:
+            conn.close()
+
+
+def test_db_rejects_null_primary_key():
+    """鍵名打錯不得寫出 NULL 主鍵列。
+
+    upsert 只取自己認得的鍵，多的靜靜丟掉——所以 `{"invNum": ...}` 以前會存
+    進一列號碼是 NULL 的發票。而 SQLite 的 NULL 不受主鍵唯一性約束：同一列
+    upsert 三次就是三列，正好違反本模組「重跑安全」的承諾，且全程無聲。
+    （invoice_items 兩個主鍵欄本來就有 NOT NULL，這裡是把 IntegrityError
+    換成指得出「你打錯哪個鍵」的訊息。）
+    """
+    with TemporaryDirectory() as d:
+        conn = db.connect(Path(d) / "guard.sqlite")
+        try:
+            typo = {"invNum": "AB12345678", "inv_date": "2026-05-01",
+                    "seller_name": "測試商行", "amount": 100.0}
+            for fn, rows in ((db.upsert_invoices, [typo]),
+                             (db.upsert_items, [dict(typo, row_no=1)])):
+                try:
+                    fn(conn, rows)
+                except ValueError as e:
+                    msg = str(e)
+                    assert "inv_num" in msg and "invNum" in msg, \
+                        f"訊息要同時說「缺什麼」與「你實際給了什麼」：{msg}"
+                    assert "測試商行" not in msg and "100.0" not in msg, \
+                        f"訊息只印鍵名，不印值（個資界線）：{msg}"
+                else:
+                    raise AssertionError(f"{fn.__name__} 應擋下打錯的鍵名")
+
+            # 擋下之後不該留下任何殘骸——以前這裡會多一列 NULL 主鍵的發票
+            assert conn.execute("select count(*) from invoices").fetchone()[0] == 0
+            assert conn.execute(
+                "select count(*) from invoice_items").fetchone()[0] == 0
+
+            # 空字串也算沒有：它進得了 TEXT 主鍵，但一樣不是發票號碼
+            for empty in ("", "   "):
+                try:
+                    db.upsert_invoices(conn, [an_invoice(empty)])
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError(f"空號碼 {empty!r} 應擋下")
+
+            # 既有資料庫才是重點：CREATE TABLE IF NOT EXISTS 不會替既存的表
+            # 補上那道 NOT NULL，所以真正保護使用者那份資料庫的是 _require_key。
+            # 照舊 schema 先建一次表，讓 db.connect() 跳過建表來驗這條路徑。
+            import sqlite3
+            old = Path(d) / "old.sqlite"
+            pre = sqlite3.connect(old)
+            pre.execute(
+                "create table invoices (inv_num TEXT PRIMARY KEY, inv_date TEXT,"
+                " seller_name TEXT, seller_ban TEXT, amount REAL,"
+                " card_type TEXT, card_no TEXT, inv_status TEXT,"
+                " inv_period TEXT, donatable TEXT, source TEXT, raw TEXT,"
+                " fetched_at TEXT)")
+            pre.commit()
+            pre.close()
+            aged = db.connect(old)
+            try:
+                notnull = [r[3] for r in aged.execute("PRAGMA table_info(invoices)")
+                           if r[1] == "inv_num"]
+                assert notnull == [0], \
+                    "這個模擬沒生效——舊表應該是「沒有 NOT NULL」的那一種"
+                try:
+                    db.upsert_invoices(aged, [typo])
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError(
+                        "既有資料庫（無 NOT NULL）沒擋下打錯的鍵名——"
+                        "使用者那份資料庫正是這一種")
+                assert aged.execute(
+                    "select count(*) from invoices").fetchone()[0] == 0
+            finally:
+                aged.close()
+            print("✓ 資料庫守衛：打錯鍵名不寫出 NULL 主鍵列（含無 NOT NULL 的既有資料庫）")
         finally:
             conn.close()
 
@@ -875,14 +1037,10 @@ def test_export_builds_dashboard():
         conn = db.connect(ws.db)
         try:
             db.upsert_invoices(conn, [
-                {"inv_num": "AA1", "inv_date": "2026-05-03",
-                 "seller_name": "五十嵐測試店", "amount": 60.0},
-                {"inv_num": "AA2", "inv_date": "2026-05-10",
-                 "seller_name": "全聯實業股份有限公司", "amount": 200.0},
-                {"inv_num": "AA3", "inv_date": "2026-05-12",
-                 "seller_name": "神秘小舖", "amount": 100.0},
-                {"inv_num": "AA4", "inv_date": "2026-06-01",
-                 "seller_name": "全聯實業股份有限公司", "amount": 300.0},
+                an_invoice("AA1", "2026-05-03", "五十嵐測試店", 60.0),
+                an_invoice("AA2", "2026-05-10", "全聯實業股份有限公司", 200.0),
+                an_invoice("AA3", "2026-05-12", "神秘小舖", 100.0),
+                an_invoice("AA4", "2026-06-01", "全聯實業股份有限公司", 300.0),
             ])
             cl = Classifier(ws.rules)
             payload = export.build_payload(conn, ws, cl)
@@ -931,18 +1089,12 @@ def test_item_override_invoice_level():
         conn = db.connect(ws.db)
         try:
             db.upsert_invoices(conn, [
-                {"inv_num": "CS1", "inv_date": "2026-02-18",
-                 "seller_name": "好市多股份有限公司",
-                 "amount": 1200.0},
-                {"inv_num": "CS2", "inv_date": "2026-02-20",
-                 "seller_name": "好市多股份有限公司",
-                 "amount": 500.0},
+                an_invoice("CS1", "2026-02-18", cos, 1200.0),
+                an_invoice("CS2", "2026-02-20", cos, 500.0),
             ])
             db.upsert_items(conn, [
-                {"inv_num": "CS1", "row_no": 1, "description": "95無鉛汽油",
-                 "amount": 1200.0, "raw": "[]"},
-                {"inv_num": "CS2", "row_no": 1, "description": "鮮奶",
-                 "amount": 500.0, "raw": "[]"},
+                an_item("CS1", 1, "95無鉛汽油", 1200.0),
+                an_item("CS2", 1, "鮮奶", 500.0),
             ])
             payload = export.build_payload(conn, ws, cl)
             by_num = {v["num"]: v for v in payload["invoices"]}
@@ -1030,9 +1182,8 @@ def test_bizreg_filters_needed_bans():
         conn = db.connect(td / "t.sqlite")
         try:
             db.upsert_invoices(conn, [
-                {"inv_num": "BB1", "inv_date": "2026-05-01",
-                 "seller_name": "拾光咖啡有限公司", "seller_ban": "12345678",
-                 "amount": 100.0},
+                an_invoice("BB1", "2026-05-01", "拾光咖啡有限公司",
+                           seller_ban="12345678"),
             ])
             n = bizreg.refresh(conn, cache=zpath)
             assert n == 1, f"應只留資料庫出現過的統編，實得 {n}"
@@ -1065,9 +1216,8 @@ def test_export_industry_fallback_and_alias():
         conn = db.connect(td / "t.sqlite")
         try:
             db.upsert_invoices(conn, [
-                {"inv_num": "CC1", "inv_date": "2026-05-01",
-                 "seller_name": "神秘小舖", "seller_ban": "12345678",
-                 "amount": 100.0},
+                an_invoice("CC1", "2026-05-01", "神秘小舖",
+                           seller_ban="12345678"),
             ])
             conn.execute(
                 "insert into biz_registry (ban, name, address, industry) "
@@ -1167,10 +1317,7 @@ def test_update_steps_assembly():
         ws = Workspace(Path(d))
         conn = db.connect(ws.db)
         try:
-            db.upsert_invoices(conn, [{
-                "inv_num": "AA1", "inv_date": "2026-06-03",
-                "seller_name": "測試商行", "amount": 100.0,
-            }])
+            db.upsert_invoices(conn, [an_invoice("AA1", "2026-06-03")])
             today = dtm.date(2026, 7, 30)
 
             full = update_steps(conn, ws, password="pw", today=today)
@@ -1285,13 +1432,12 @@ def test_export_items_and_query_page():
         conn = db.connect(ws.db)
         try:
             db.upsert_invoices(conn, [
-                {"inv_num": "DD1", "inv_date": "2026-05-03",
-                 "seller_name": "五十嵐測試店", "amount": 60.0,
-                 "card_no": "/SECRET99"},
+                an_invoice("DD1", "2026-05-03", "五十嵐測試店", 60.0,
+                           card_no="/SECRET99"),
             ])
             db.upsert_items(conn, [
-                {"inv_num": "DD1", "row_no": 1, "description": "珍珠鮮奶茶",
-                 "quantity": 1, "unit_price": 60.0, "amount": 60.0},
+                an_item("DD1", 1, "珍珠鮮奶茶", 60.0, quantity=1,
+                        unit_price=60.0),
             ])
             cl = Classifier(ws.rules)
             payload = export.build_payload(conn, ws, cl)
@@ -1330,8 +1476,7 @@ def test_serve_rules_writeback():
         conn = db.connect(ws.db)
         try:
             db.upsert_invoices(conn, [
-                {"inv_num": "EE1", "inv_date": "2026-05-01",
-                 "seller_name": "神祕測試店", "amount": 100.0},
+                an_invoice("EE1", "2026-05-01", "神祕測試店"),
             ])
             local.write_text(json.dumps(
                 {"aliases": {"神祕": "MYSTERY"},
@@ -1444,8 +1589,7 @@ def test_export_match_details():
         conn = db.connect(ws.db)
         try:
             db.upsert_invoices(conn, [
-                {"inv_num": "AA1", "inv_date": "2026-05-01",
-                 "seller_name": "富利餐飲", "amount": 100.0}])
+                an_invoice("AA1", "2026-05-01", "富利餐飲")])
             cl = Classifier(ws.rules)
             payload = export.build_payload(conn, ws, cl)
             # 層級直方圖不進 payload——食安頁從 matches 導出（唯一編碼）
@@ -1587,14 +1731,10 @@ def test_lottery_check_invoices():
             assert conn.execute(
                 "select count(*) from lottery_draws").fetchone()[0] == 1
             db.upsert_invoices(conn, [
-                {"inv_num": "AB12345678", "inv_date": "2026-05-10",
-                 "seller_name": "頭獎店", "amount": 100},
-                {"inv_num": "CD00000217", "inv_date": "2026-06-01",
-                 "seller_name": "小七", "amount": 55},
-                {"inv_num": "EF99999999", "inv_date": "2026-05-20",
-                 "seller_name": "沒中", "amount": 80},
-                {"inv_num": "GH11223344", "inv_date": "2026-07-01",
-                 "seller_name": "期別外", "amount": 999},
+                an_invoice("AB12345678", "2026-05-10", "頭獎店", 100.0),
+                an_invoice("CD00000217", "2026-06-01", "小七", 55.0),
+                an_invoice("EF99999999", "2026-05-20", "沒中", 80.0),
+                an_invoice("GH11223344", "2026-07-01", "期別外", 999.0),
             ])
             r = lottery.check_invoices(conn, Path(td) / "cache")
             p = r["periods"][0]
@@ -1629,12 +1769,9 @@ def test_lottery_cloud_check():
                 "first": ["12345678", "87654321", "11223344"], "extra": [],
                 "claim_start": "2026-08-06", "claim_end": "2026-11-05"}])
             db.upsert_invoices(conn, [
-                {"inv_num": "AB12345678", "inv_date": "2026-05-10",
-                 "seller_name": "兩者皆中", "amount": 100},
-                {"inv_num": "CD11112222", "inv_date": "2026-06-02",
-                 "seller_name": "雲端八百", "amount": 60},
-                {"inv_num": "EF33334444", "inv_date": "2026-05-20",
-                 "seller_name": "沒中", "amount": 80},
+                an_invoice("AB12345678", "2026-05-10", "兩者皆中", 100.0),
+                an_invoice("CD11112222", "2026-06-02", "雲端八百", 60.0),
+                an_invoice("EF33334444", "2026-05-20", "沒中", 80.0),
             ])
             r = lottery.check_invoices(conn, cache_dir=cache)
             p = r["periods"][0]
@@ -1722,12 +1859,10 @@ def test_cli_wires_paths_through_workspace():
             conn = db.connect(ws.db)
             try:
                 db.upsert_invoices(conn, [
-                    {"inv_num": "ZZ11111111", "inv_date": "2026-05-01",
-                     "seller_name": "測試商行一店", "amount": 100.0},
+                    an_invoice("ZZ11111111", "2026-05-01", "測試商行一店"),
                 ])
                 db.upsert_items(conn, [
-                    {"inv_num": "ZZ11111111", "row_no": 1,
-                     "description": "特級沙拉油", "amount": 100.0, "raw": "[]"},
+                    an_item("ZZ11111111", 1, "特級沙拉油"),
                 ])
                 db.upsert_fda_rows(conn, [
                     {"row_hash": "z1", "source_url": "u1", "table_key": "t",
@@ -2202,22 +2337,15 @@ def test_payload_contract():
             # 四個月、電信 599×3 → 固定支出；未分類店家 → uncategorized；
             # 手搖飲 → unnecessary；中獎號碼 → lottery.periods 與 next
             db.upsert_invoices(conn, [
-                {"inv_num": "AA1", "inv_date": "2026-03-05",
-                 "seller_name": "測試電信", "amount": 599.0},
-                {"inv_num": "AA2", "inv_date": "2026-03-12",
-                 "seller_name": "測試超市", "amount": 250.0},
-                {"inv_num": "AA3", "inv_date": "2026-04-05",
-                 "seller_name": "測試電信", "amount": 599.0},
-                {"inv_num": "AB12345678", "inv_date": "2026-04-18",
-                 "seller_name": "五十嵐測試店", "amount": 60.0},
-                {"inv_num": "AA5", "inv_date": "2026-05-05",
-                 "seller_name": "測試電信", "amount": 599.0},
-                {"inv_num": "AA7", "inv_date": "2026-05-12",
-                 "seller_name": "神秘測試舖", "amount": 100.0},
+                an_invoice("AA1", "2026-03-05", "測試電信", 599.0),
+                an_invoice("AA2", "2026-03-12", "測試超市", 250.0),
+                an_invoice("AA3", "2026-04-05", "測試電信", 599.0),
+                an_invoice("AB12345678", "2026-04-18", "五十嵐測試店", 60.0),
+                an_invoice("AA5", "2026-05-05", "測試電信", 599.0),
+                an_invoice("AA7", "2026-05-12", "神秘測試舖", 100.0),
             ])
             db.upsert_items(conn, [
-                {"inv_num": "AA2", "row_no": 1, "description": "雞蛋",
-                 "quantity": 1, "unit_price": 250.0, "amount": 250.0},
+                an_item("AA2", 1, "雞蛋", 250.0, quantity=1, unit_price=250.0),
             ])
             db.upsert_lottery_draws(conn, [
                 {"period": "11503", "special": "11223344", "grand": "55667788",

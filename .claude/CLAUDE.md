@@ -16,7 +16,7 @@ FDA 目前接三個來源：中聯油脂案專區強制下架清單（edible_oil
 ```
 pip install -e .                      # 一律 editable；PyPI 上的 twcrawl 是無關的舊套件
 python -m playwright install chromium # playwright 指令找不到時用這個
-python tests/test_twcrawl.py          # 測試（47/47，不用 pytest）
+python tests/test_twcrawl.py          # 測試（49/49，不用 pytest）
 python tests/test_twcrawl.py --update-golden   # 有意改動四頁畫面後重生 tests/golden/
 
 # 每月例行（一鍵；fetch 區間自動推算、FDA 回溯 90 天只給 feed 型來源）
@@ -99,7 +99,9 @@ src/twcrawl/
 │                 這個模組不 import 其他 twcrawl 模組、不碰 Playwright
 ├── netcapture.py 攔截 XHR/下載 → captures/（索引交給 capture_index）
 ├── tables.py     通用表格擷取 + 分頁（含截斷警告）
-├── db.py         SQLite schema 與 upsert（全部冪等，重跑安全）。讀取面**只收
+├── db.py         SQLite schema 與 upsert（全部冪等，重跑安全——這句由 `_require_key`
+│                 守著：upsert 只取自己認得的鍵，鍵名打錯會被靜默丟掉而寫出一列
+│                 NULL 主鍵，且 NULL 不受主鍵唯一性約束，重跑幾次就累積幾列）。讀取面**只收
 │                 不只一個 caller 要的**：`invoices()`／`invoice_items()` 吃同一組
 │                 過濾（since／months）並回傳 NamedTuple（解包與屬性都能用）——
 │                 過濾條件由 `_invoice_where(alias)` 出一份，join 版與單表版同源，
@@ -419,6 +421,27 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   回傳 `{"invoices": total_inv, **res}`，`res` 也有 `invoices`，把抓取數靜靜蓋成
   入庫數）與一個死 import。`_Sink` 從「純檔案系統程式碼卻無從測起」變成有測試。
   測試 45→47
+- ✅ 測試資料建構器（2026-08-01，架構檢視 candidate 7；**七張卡至此結清**）：
+  42 個手打的資料庫字面（32 個 invoice、10 個 item——交接文件寫的 24／9 是低估）
+  收成 `an_invoice()`／`an_item()`，參數名一律等於欄位名（名字不一致的話，
+  多給的鍵會走進 `**extra` 再靠 dict 合併順序蓋掉位置參數，結果對是靠運氣）。
+  **量測推翻了卡片的前提之一**：「`amount` int 與 float 並存」在 SQLite 的 REAL
+  親和性下入庫都是 100.0，純屬觀感。真正有牙齒的是量測時挖出來的另一件事——
+  `invoices.inv_num` 少了 `invoice_items` 早就宣告的 `NOT NULL`，於是鍵名打錯
+  （`invNum`）會被 upsert 靜默丟掉、寫進一列號碼是 NULL 的發票，而 NULL 不受
+  主鍵唯一性約束：**同一列 upsert 三次就是三列**，正好違反 db.py 開宗明義的
+  「重跑安全」。生產端進不去（`einvoice` 有 `INV_NUM_RE` 擋，且只有 ingest 一個
+  呼叫端），測試端則毫無防護。修法是 `_require_key`（兩個 upsert 都過；訊息印
+  **鍵名不印值**，值是消費紀錄）＋ SCHEMA 補上 `NOT NULL`；**真正保護使用者那份
+  資料庫的是前者**——`CREATE TABLE IF NOT EXISTS` 不會替既存表補約束，所以測試
+  特地照舊 schema 先建一次表，走那條沒有 NOT NULL 的路徑（不這樣做，測試會被
+  新 schema 的 IntegrityError 接住，看起來綠但沒驗到重點）。新增兩個測試：形狀
+  三方釘住（表欄位 ↔ `_INVOICE_KEYS`／`_ITEM_KEYS` ↔ 建構器，連「常數有這個鍵
+  但 INSERT 沒綁它」也抓得到）、以及守衛本身。順帶把只寫在註解裡的「`raw` 是
+  COALESCE 的刻意例外」變成斷言。`fda_rows`／`lottery_draws` 的字面刻意不動——
+  量測顯示它們各只有一種鍵組合，沒有漂移可收。**驗證**：四個修正逐一還原都確認
+  變紅且訊息是人話；真實資料庫（485 張）的 payload SHA256 零差異；golden 未動。
+  測試 47→49
 - ⬜ 緩辦（要做先問）：CSV 匯出、分類趨勢圖、地圖店家搜尋
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive
