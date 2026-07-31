@@ -72,6 +72,56 @@ def _items_by_invoice(conn) -> dict[str, list[dict]]:
     return out
 
 
+# 分類色槽：6 槽對應 ui.css 的 --s1..--s6。指派由匯出端決定並持久化在
+# 工作區本機狀態（state/catslots.json），頁面只讀 categories[].slot——
+# 以前由 JS 依當期金額排名取前六，排名一變整組跳色，前後兩份月報無法
+# 對照（issue #10）。未分類永遠不佔槽（中性灰）。
+N_SLOTS = 6
+
+
+def assign_slots(prev: dict[str, int], ranked: list[str],
+                 n_slots: int = N_SLOTS) -> dict[str, int]:
+    """色槽指派：在榜者沿用舊槽、新進者取最小空槽、槽滿時向落榜持有者收回。
+
+    穩定性契約：輸入不變則輸出不變；排名變動不改既有持有者的槽；收回只
+    發生在「新進者要槽而沒有空槽」時，且從最不需要的持有者開始（不在
+    ranked 裡的先收，再收名次最低的）。回傳含未在榜但仍持槽者——分類
+    短暫消失（該期零消費）再回來時拿回同一色。
+    """
+    top = ranked[:n_slots]
+    out = dict(prev)
+    for name in top:
+        if name in out:
+            continue
+        free = sorted(set(range(1, n_slots + 1)) - set(out.values()))
+        if free:
+            out[name] = free[0]
+            continue
+        fallen = [n for n in out if n not in top]
+        if not fallen:      # 理論上到不了：top 與持有者都不超過 n_slots
+            break
+        worst = max(fallen, key=lambda n: (ranked.index(n) if n in ranked
+                                           else len(ranked)))
+        out[name] = out.pop(worst)
+    return out
+
+
+def _load_slots(path: Path) -> dict[str, int]:
+    """讀回上次的指派。壞檔（手改壞、槽號超界、槽重複）整份放棄重指派——
+    色槽只是外觀延續性，不值得為它中斷匯出。"""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        out: dict[str, int] = {}
+        for name, slot in raw.items():
+            if not (isinstance(name, str) and isinstance(slot, int)
+                    and 1 <= slot <= N_SLOTS and slot not in out.values()):
+                return {}
+            out[name] = slot
+        return out
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
 # 固定支出的判準。查詢頁把這些數字寫進說明文案，所以由 payload 帶過去——
 # 以前門檻在這裡、文案在 query.html，改了門檻文案不會跟著改。
 FIXED_RULE = {
@@ -273,6 +323,18 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
         lottery["next"] = {"label": lottery_mod.period_label(np_),
                           "drawDate": nd, "pending": pending}
 
+    # 色槽：沿用上次指派（工作區本機狀態），新分類取空槽——跨次匯出
+    # 同分類同色。serve 的重生也走這裡，兩條路徑不可能分岔。
+    cat_rows = sorted(cats.values(), key=lambda c: -c["total"])
+    slots = assign_slots(
+        _load_slots(ws.state_path("catslots")),
+        [c["name"] for c in cat_rows if c["name"] != UNCATEGORIZED])
+    ws.ensure_state()
+    ws.state_path("catslots").write_text(
+        json.dumps(slots, ensure_ascii=False, indent=1), encoding="utf-8")
+    for c in cat_rows:
+        c["slot"] = slots.get(c["name"])
+
     # 「沒有任何規則命中」看 source，不是拿名字跟 UNCATEGORIZED 比
     uncategorized = sorted(
         (s for name, s in sellers.items()
@@ -287,7 +349,7 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
         "fixed": _detect_fixed(invoice_rows),
         "fixedRule": FIXED_RULE,
         "months": [months[k] for k in sorted(months)],
-        "categories": sorted(cats.values(), key=lambda c: -c["total"]),
+        "categories": cat_rows,
         "sellers": sorted(sellers.values(), key=lambda s: -s["total"]),
         "uncategorized": uncategorized,
         "fda": {"rows": fda_rows, "matches": match_rows,

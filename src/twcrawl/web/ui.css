@@ -5,8 +5,8 @@
    針把關）。
 
    「不受影響」要查兩條路徑，不是一條：CSS 的 var(--x)，以及 JS 的
-   getComputedStyle().getPropertyValue("--x")——地圖的分類色就是後者
-   取的（SLOTS 陣列）。只查 var() 會漏。
+   getComputedStyle().getPropertyValue("--x")——分類色 --s1..--s6 就是
+   後者取的（ui.js catColors 以 "--s"+slot 組名）。只查 var() 會漏。
 
    刻意留在各頁的：
      --warning  dashboard 與 fda 的值不一致（dashboard 那份沒人用）

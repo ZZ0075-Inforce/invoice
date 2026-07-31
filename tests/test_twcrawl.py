@@ -1063,6 +1063,73 @@ def test_export_builds_dashboard():
     print("✓ export 衍生儀表板資料與模板就位")
 
 
+def test_catslots_stable_across_exports():
+    """色槽指派（issue #10）：資料不變兩次匯出逐槽相同；排名變動不換既有
+    分類的色；新進分類取空槽；槽滿時只收回落榜持有者的槽。"""
+    from twcrawl import export
+    from twcrawl.categories import Classifier
+    from twcrawl.workspace import Workspace
+
+    # -- 純函式層：指派規則本身 -------------------------------------------
+    a = export.assign_slots({}, ["甲", "乙", "丙"])
+    assert a == {"甲": 1, "乙": 2, "丙": 3}, a
+    assert export.assign_slots(a, ["丙", "甲", "乙"]) == a, \
+        "排名洗牌（成員不變）不得換色"
+    b = export.assign_slots(a, ["乙", "丁", "甲", "丙"])
+    assert b["丁"] == 4 and all(b[n] == a[n] for n in a), \
+        f"新進分類應取最小空槽、不動既有指派：{b}"
+
+    full = {n: i + 1 for i, n in enumerate("甲乙丙丁戊己")}
+    got = export.assign_slots(full, list("甲乙丙丁戊庚己"))
+    assert got["庚"] == full["己"] and all(got[n] == full[n] for n in "甲乙丙丁戊"), \
+        f"槽滿時應收回落榜者（己）的槽給新進者、其餘不動：{got}"
+    # 兩個落榜持有者：先收「連 ranked 都不在」的，再收名次最低的
+    got = export.assign_slots(full, list("甲乙丙庚辛丁己"))   # 戊消失、己掉到第 7
+    assert got["庚"] == full["戊"] and got["辛"] == full["己"], got
+
+    # -- 匯出整合層：持久化在工作區、payload 帶 slot ----------------------
+    with TemporaryDirectory() as td:
+        ws = Workspace(Path(td))
+        conn = db.connect(ws.db)
+        try:
+            db.upsert_invoices(conn, [
+                an_invoice("SL1", "2026-05-03", "全聯實業股份有限公司", 500.0),
+                an_invoice("SL2", "2026-05-05", "五十嵐測試店", 60.0),
+                an_invoice("SL3", "2026-05-07", "神秘小舖", 100.0),
+            ])
+            cl = Classifier(ws.rules)
+            s1 = {c["name"]: c["slot"]
+                  for c in export.build_payload(conn, ws, cl)["categories"]}
+            s2 = {c["name"]: c["slot"]
+                  for c in export.build_payload(conn, ws, cl)["categories"]}
+            assert s1 == s2 == {"超市": 1, "手搖飲": 2, "未分類": None}, \
+                f"資料不變，連續兩次匯出的指派應逐槽相同：{s1} vs {s2}"
+            assert ws.state_path("catslots").exists(), \
+                "指派應持久化在工作區本機狀態（state/catslots.json）"
+
+            # 排名變動：手搖飲超車超市、速食新進——既有不換色、新進取空槽
+            db.upsert_invoices(conn, [
+                an_invoice("SL4", "2026-06-01", "五十嵐測試店", 600.0),
+                an_invoice("SL5", "2026-06-02", "摩斯測試店", 80.0),
+            ])
+            p3 = export.build_payload(conn, ws, cl)
+            s3 = {c["name"]: c["slot"] for c in p3["categories"]}
+            assert s3["超市"] == 1 and s3["手搖飲"] == 2, \
+                f"排名變動不得換既有分類的色：{s3}"
+            assert s3["速食"] == 3, f"新進分類應取未用槽位：{s3}"
+            assert p3["categories"][0]["name"] == "手搖飲", \
+                "categories 仍依金額排序——順序歸排序、顏色歸槽位"
+
+            # 狀態檔壞掉：整份放棄重指派，匯出不得中斷
+            ws.state_path("catslots").write_text("not json", encoding="utf-8")
+            s4 = {c["name"]: c["slot"]
+                  for c in export.build_payload(conn, ws, cl)["categories"]}
+            assert sorted(v for v in s4.values() if v) == [1, 2, 3], s4
+        finally:
+            conn.close()  # Windows：先關連線才能清 TemporaryDirectory
+    print("✓ 色槽指派：兩次匯出逐槽相同、排名變動不換色、新進取空槽")
+
+
 def test_item_override_invoice_level():
     from twcrawl import export
     from twcrawl.categories import Classifier
@@ -1974,10 +2041,14 @@ def a_payload(**overrides) -> dict:
                       "minDays": 25, "maxDays": 400, "staleFactor": 1.6},
         "months": months,
         "categories": [
-            {"name": "電信", "total": 1797.0, "count": 3, "unnecessary": False},
-            {"name": "超市", "total": 750.0, "count": 3, "unnecessary": False},
-            {"name": "手搖飲", "total": 120.0, "count": 2, "unnecessary": True},
-            {"name": "未分類", "total": 100.0, "count": 1, "unnecessary": False},
+            {"name": "電信", "total": 1797.0, "count": 3,
+             "unnecessary": False, "slot": 1},
+            {"name": "超市", "total": 750.0, "count": 3,
+             "unnecessary": False, "slot": 2},
+            {"name": "手搖飲", "total": 120.0, "count": 2,
+             "unnecessary": True, "slot": 3},
+            {"name": "未分類", "total": 100.0, "count": 1,
+             "unnecessary": False, "slot": None},
         ],
         "sellers": [
             {"name": "測試電信", "category": "電信", "total": 1797.0, "count": 3,

@@ -163,7 +163,10 @@ src/twcrawl/
 │                 載具號碼、raw 永不進 data.js，ADR-0002；fda.sources 歸戶：match
 │                 報告的 source 欄是 source_url，反查 SOURCES 得名稱，FDA_SOURCE_META
 │                 給顯示名/型態、未知來源後備「名稱＋事件」；_detect_fixed 固定支出
-│                 偵測也在這——月報磚與查詢頁視圖同源）
+│                 偵測也在這——月報磚與查詢頁視圖同源；分類色槽 assign_slots
+│                 在這指派並持久化 state/catslots.json（在榜沿用、新進取空槽、
+│                 槽滿只收落榜者），payload 帶 categories[].slot，頁面只讀——
+│                 跨次匯出同分類同色，未分類永遠中性灰）
 ├── serve.py      本機小站（ADR-0002 雙模式；只綁 127.0.0.1）：靜態服務 out/ ＋
 │                 POST /api/rules 併規則入 categories.local.json→重生 data.js；
 │                 ThreadingHTTPServer，每請求自開 SQLite 連線（執行緒安全）
@@ -442,6 +445,17 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   量測顯示它們各只有一種鍵組合，沒有漂移可收。**驗證**：四個修正逐一還原都確認
   變紅且訊息是人話；真實資料庫（485 張）的 payload SHA256 零差異；golden 未動。
   測試 47→49
+- ✅ 分類色槽穩定指派（2026-08-01，issue #10）：色槽指派從 JS 的「當期金額
+  排名取前六」搬到匯出端 `export.assign_slots`，持久化 `state/catslots.json`
+  （工作區本機狀態、不進 repo 不進備份包）。規則：在榜沿用舊槽、新進者取
+  最小空槽、槽滿只向落榜持有者收回（先收不在榜的、再收名次最低的）——
+  排名變動不再讓整組跳色。payload 的 `categories[]` 加 `slot`（未分類恆
+  None）；`ui.js` catColors 只讀 slot（舊 data.js 無 slot → 全灰、不炸），
+  dashboard 兩處取色改走 cats.of/at、`SLOTS` 陣列刪除；map 零改動。首次
+  指派＝舊排名順序，六份 golden 逐位元組零 diff；色票未動，dataviz 驗證器
+  亮暗兩模式重跑全過（亮色 3 槽 <3:1 的 WARN 是既有狀態，月報有直接標籤
+  與表格作 relief）。測試 49→50（純函式指派規則＋匯出兩次逐槽相同＋壞
+  狀態檔不中斷匯出）
 - ⬜ 緩辦（要做先問）：CSV 匯出、分類趨勢圖、地圖店家搜尋
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

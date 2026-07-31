@@ -19,7 +19,6 @@
   }
 
   const THEMES = [["", "🌗 自動"], ["light", "☀️ 亮"], ["dark", "🌙 暗"]];
-  const SLOTS = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6"];
 
   const esc = s => String(s).replace(/[&<>"]/g,
     ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]));
@@ -48,17 +47,20 @@
     return tb;
   }
 
-  /** 分類色槽：全期金額前 6 大分類各佔一槽，其餘（含未分類）為中性灰。 */
+  /** 分類色槽：指派由匯出端決定並持久化（categories[].slot，1..6），這裡
+   *  只讀結果——同一分類跨次匯出才不會跳色（issue #10）。沒有槽的（含
+   *  未分類）為中性灰；舊版 data.js 沒有 slot 欄位時全部落灰，重跑
+   *  twcrawl export 即可。top 依 categories 的既有排序（金額），給堆疊
+   *  圖與圖例當系列順序——順序歸排序、顏色歸槽位。 */
   function catColors(categories) {
-    const top = (categories || [])
-      .filter(c => c.name !== "未分類").slice(0, 6).map(c => c.name);
+    const slots = {};
+    for (const c of categories || []) if (c.slot >= 1) slots[c.name] = c.slot;
+    const top = (categories || []).map(c => c.name).filter(n => slots[n]);
+    const of = name => slots[name] ? css("--s" + slots[name]) : css("--other");
     return {
       top,
-      at: i => (i >= 0 && i < top.length ? css(SLOTS[i]) : css("--other")),
-      of: name => {
-        const i = top.indexOf(name);
-        return i >= 0 ? css(SLOTS[i]) : css("--other");
-      },
+      at: i => (i >= 0 && i < top.length ? of(top[i]) : css("--other")),
+      of,
     };
   }
 
@@ -120,7 +122,7 @@
     }
   }
 
-  const TW = { THEMES, SLOTS, esc, nt, css, el, themeButton, catColors,
+  const TW = { THEMES, esc, nt, css, el, themeButton, catColors,
                unnecessaryCats, monthTotals, monthBounds, page };
   window.TW = TW;
 })();

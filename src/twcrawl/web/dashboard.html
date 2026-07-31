@@ -92,7 +92,6 @@ TW.page({
   needs: ["months"],
   render(D, ui) {
   const { css, nt, esc, el } = ui;
-  const SLOTS = ui.SLOTS;
   const app = document.getElementById("app");
   const OTHER = "其他（含未分類）";
   const compact = x => x >= 10000 ? "NT$" + (x/10000).toFixed(1) + " 萬" : nt(x);
@@ -157,10 +156,12 @@ TW.page({
   const hideTip = () => { tt.style.display = "none"; };
 
   // ---- 資料整形 ---------------------------------------------------------
-  // 月度堆疊：全期金額前 6 大分類各佔一個色槽，其餘（含未分類）合併為中性灰
-  const topCats = ui.catColors(D.categories).top;
+  // 月度堆疊：色槽指派由匯出端持久化（issue #10），這裡只讀 slot；
+  // 有槽的分類各佔一系列，其餘（含未分類）合併為中性灰
+  const cats = ui.catColors(D.categories);
+  const topCats = cats.top;
   const series = topCats.concat([OTHER]);
-  const color = i => i < topCats.length ? css(SLOTS[i]) : css("--other");
+  const color = i => cats.at(i);   // 超出 top 的（OTHER）回中性灰
   const months = D.months.map(m => {
     const by = {}; let other = 0;
     for (const [cat, amt] of Object.entries(m.byCategory)) {
@@ -527,8 +528,7 @@ TW.page({
       label: (c.unnecessary ? "⚠ " : "") + c.name,
       value: c.total, count: c.count,
       q: "query.html?cat=" + encodeURIComponent(c.name),
-      color: c.name === "未分類" ? css("--other")
-        : topCats.includes(c.name) ? color(topCats.indexOf(c.name)) : css("--other"),
+      color: cats.of(c.name),   // 沒有槽的（含未分類）就是中性灰
     }))));
   cols.append(hbarCard(
     "店家排行（前 10）", "全期間消費金額最高的店家；點列到查詢頁鑽取",
