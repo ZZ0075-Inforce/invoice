@@ -605,6 +605,12 @@ def test_match_invoices_against_fda():
             import csv as _csv
             with report.open(encoding="utf-8-sig") as f:
                 rows = list(_csv.DictReader(f))
+            # 同層級內依發票日期升冪：db.invoices() 保證順序，報告才穩定。
+            # 以前不帶 since 時那條 select 沒有 order by，拿到的是 SQLite
+            # 的儲存順序（未定義行為），同一份資料兩次匯出可能不同序
+            for lvl in ("店家", "品項", "警訊標題"):
+                d = [r["inv_date"] for r in rows if r["level"] == lvl]
+                assert d == sorted(d), f"{lvl} 的報告列未依日期升冪：{d}"
             prod = next(r for r in rows if r["level"] == "品項")
             assert prod["source"] == "u1", "品項命中應標注來源（食安頁歸戶用）"
             assert not any("蝦仁蛋炒飯" in r["invoice_side"] for r in rows), \
@@ -636,7 +642,31 @@ def test_db_upsert_is_idempotent():
             db.upsert_items(conn, items)
             n = conn.execute("SELECT COUNT(*) FROM invoice_items").fetchone()[0]
             assert n == 1, f"明細重複匯入應維持 1 筆，實得 {n}"
-            print("✓ SQLite upsert 具冪等性")
+
+            # COALESCE 不變式：後來的部分抓取不得抹掉已知欄位。這條只寫在
+            # upsert_invoices 的 SQL 裡，以前沒有測試——而 raw 是刻意的例外
+            db.upsert_invoices(conn, [{"inv_num": "AB12345678"}])
+            got = db.invoices(conn)
+            assert len(got) == 1, \
+                f"只帶號碼的後續 upsert 抹掉了 inv_date（COALESCE 不變式）：{got}"
+            assert got[0].seller == "測試" and got[0].amount == 100.0, \
+                f"只帶號碼的後續 upsert 不該抹掉店家與金額：{got[0]}"
+
+            b = [{"ban": "12345678", "name": "測試商行",
+                  "address": "測試市測試路 1 號", "industry": "餐館", "codes": "56"}]
+            db.upsert_biz(conn, b)
+            db.upsert_biz(conn, b)
+            regs = db.biz_registry(conn)
+            assert len(regs) == 1 and regs[0].industry == "餐館", regs
+            assert not db.biz_registry(conn, needs_geocode=False)[0].lat
+            assert len(db.biz_registry(conn, needs_geocode=True)) == 1, \
+                "有地址、沒座標的才進待編碼清單"
+            db.set_biz_location(conn, "12345678", 25.0, 121.5)
+            assert not db.biz_registry(conn, needs_geocode=True), "編碼後就不該再入列"
+            db.upsert_biz(conn, b)
+            assert db.biz_registry(conn)[0].lat == 25.0, \
+                "重抓對照表不得洗掉已解出的座標"
+            print("✓ SQLite upsert 具冪等性、COALESCE 不抹既有值、座標不被對照表覆蓋")
         finally:
             conn.close()
 

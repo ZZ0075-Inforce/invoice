@@ -14,6 +14,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+from . import db
+
 URL = "https://eip.fia.gov.tw/data/BGMOPEN1.zip"
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36")
@@ -76,7 +78,7 @@ def refresh(conn, cache: Path | str, url: str = URL, force: bool = False) -> int
     else:
         print(f"沿用快取 {cache}（要更新加 --force）")
 
-    n = 0
+    found: list[dict] = []
     with zipfile.ZipFile(cache) as z:
         member = next(m for m in z.namelist() if m.lower().endswith(".csv"))
         with z.open(member) as raw:
@@ -92,19 +94,16 @@ def refresh(conn, cache: Path | str, url: str = URL, force: bool = False) -> int
                 pairs = [(rec[c].strip(), rec[m].strip())
                          for c, m in idx["industry"]
                          if len(rec) > m and rec[c].strip()]
-                conn.execute(
-                    "insert into biz_registry (ban, name, address, industry, industry_codes)"
-                    " values (?,?,?,?,?)"
-                    " on conflict(ban) do update set name=excluded.name,"
-                    " address=excluded.address, industry=excluded.industry,"
-                    " industry_codes=excluded.industry_codes,"
-                    " fetched_at=datetime('now')",
-                    (ban, rec[idx["name"]].strip(), rec[idx["address"]].strip(),
-                     "、".join(nm for _c, nm in pairs if nm),
-                     ",".join(c for c, _nm in pairs)),
-                )
-                n += 1
-    conn.commit()
+                found.append({
+                    "ban": ban,
+                    "name": rec[idx["name"]].strip(),
+                    "address": rec[idx["address"]].strip(),
+                    # 主業在前的順序照財政部原樣保留——categories 的行業後備
+                    # 逐段比對時要靠它才問得到主業
+                    "industry": "、".join(nm for _c, nm in pairs if nm),
+                    "codes": ",".join(c for c, _nm in pairs),
+                })
+    n = db.upsert_biz(conn, found)
     print(f"對照表：命中 {n}/{len(bans)} 個統編（存入 biz_registry）")
     if n < len(bans):
         print("！未命中的多為已歇業或總機構報稅的統編，屬正常現象")

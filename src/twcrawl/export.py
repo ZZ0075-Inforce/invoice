@@ -33,9 +33,7 @@ def _seller_info(conn, cl: Classifier, industries: dict[str, str]) -> dict[str, 
     分類鏈（規則兩層 → 稅籍行業後備 → 未分類）整條在 Classifier 裡，
     這裡只接資料庫欄位。
     """
-    reg = {ban: {"address": addr, "lat": lat, "lon": lon}
-           for ban, addr, lat, lon in conn.execute(
-               "select ban, address, lat, lon from biz_registry")}
+    reg = {b.ban: b for b in db.biz_registry(conn)}
     info: dict[str, dict] = {}
     for sname, ban in conn.execute(
             "select seller_name, max(seller_ban) from invoices "
@@ -46,9 +44,9 @@ def _seller_info(conn, cl: Classifier, industries: dict[str, str]) -> dict[str, 
             "display": cl.display_name(sname),
             "legal": sname, "category": cat.name, "source": cat.source,
             "industry": industries.get(sname),
-            "address": r["address"] if r else None,
-            "lat": r["lat"] if r else None,
-            "lon": r["lon"] if r else None,
+            "address": r.address if r else None,
+            "lat": r.lat if r else None,
+            "lon": r.lon if r else None,
         }
     return info
 
@@ -67,11 +65,10 @@ def _top_items(conn, k: int = 3) -> dict[str, list[str]]:
 
 def _items_by_invoice(conn) -> dict[str, list[dict]]:
     out: dict[str, list[dict]] = {}
-    for inv_num, desc, qty, price, amount in conn.execute(
-            "select inv_num, description, quantity, unit_price, amount "
-            "from invoice_items order by inv_num, row_no"):
-        out.setdefault(inv_num, []).append(
-            {"desc": desc, "qty": qty, "price": price, "amount": amount})
+    for it in db.invoice_items(conn):
+        out.setdefault(it.inv_num, []).append(
+            {"desc": it.desc, "qty": it.qty, "price": it.price,
+             "amount": it.amount})
     return out
 
 
@@ -156,10 +153,8 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
     cl = classifier.with_industries(industries)
     info = _seller_info(conn, cl, industries)
     top_items = _top_items(conn)
-    invs = conn.execute(
-        "select inv_num, inv_date, seller_name, amount from invoices "
-        "where inv_date is not null and amount is not null order by inv_date"
-    ).fetchall()
+    # amount 的非空保護留在這裡：只有月報在加總，其他讀取端不需要它
+    invs = [v for v in db.invoices(conn) if v.amount is not None]
 
     items = _items_by_invoice(conn)
     months: dict[str, dict] = {}
@@ -274,9 +269,7 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
     }
     if lot_raw["periods"]:
         np_, nd = lottery_mod.next_draw(lot_raw["periods"][0]["period"])
-        pending = conn.execute(
-            "select count(*) from invoices where substr(inv_date, 1, 7) in (?, ?)",
-            lottery_mod.period_months(np_)).fetchone()[0]
+        pending = len(db.invoices(conn, months=lottery_mod.period_months(np_)))
         lottery["next"] = {"label": lottery_mod.period_label(np_),
                           "drawDate": nd, "pending": pending}
 

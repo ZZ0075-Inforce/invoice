@@ -24,6 +24,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from . import db
+
 URLS = (
     "https://invoice.etax.nat.gov.tw/",              # 本期
     "https://invoice.etax.nat.gov.tw/lastNumber.html",  # 上期
@@ -303,15 +305,12 @@ def check_invoices(conn: sqlite3.Connection, cache_dir: Path) -> dict:
     for d in draws:
         months = period_months(d["period"])
         covered.update(months)
-        rows = conn.execute(
-            "select inv_num, inv_date, seller_name, amount from invoices "
-            "where substr(inv_date, 1, 7) in (?, ?) order by inv_date",
-            months).fetchall()
+        rows = db.invoices(conn, months=months)
         cloud = _cloud_hits(d["period"],
-                            {str(r["inv_num"]) for r in rows}, cache_dir)
+                            {str(r.num) for r in rows}, cache_dir)
         wins = []
         for r in rows:
-            full = str(r["inv_num"])
+            full = str(r.num)
             num8 = full[-8:]
             trad = match_number(num8, d) if num8.isdigit() else None
             cl = cloud.get(full)
@@ -320,8 +319,8 @@ def check_invoices(conn: sqlite3.Connection, cache_dir: Path) -> dict:
             hi, lo = ((trad, cl) if (trad and (not cl or trad[1] >= cl[1]))
                       else (cl, trad))
             wins.append({
-                "inv_num": full, "date": r["inv_date"],
-                "seller": r["seller_name"], "amount": r["amount"],
+                "inv_num": full, "date": r.date,
+                "seller": r.seller, "amount": r.amount,
                 "prize": hi[0], "prize_amount": hi[1],
                 "also": lo[0] if lo else None,   # 擇高後另一個符合的獎
             })

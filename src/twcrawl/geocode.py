@@ -20,6 +20,8 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
+from . import db
+
 NLSC = "https://api.nlsc.gov.tw/idc/TextQueryMap/"
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -98,24 +100,19 @@ def _resolve(addr: str, delay: float) -> tuple[float, float] | None:
 
 
 def refresh(conn, delay: float = 1.0) -> int:
-    rows = conn.execute(
-        "select ban, name, address from biz_registry "
-        "where address is not null and address != '' and lat is null"
-    ).fetchall()
+    rows = db.biz_registry(conn, needs_geocode=True)
     if not rows:
         print("沒有待編碼的地址（全部已有座標）。")
         return 0
     print(f"待編碼 {len(rows)} 筆（NLSC 門牌定位為主、Nominatim 後備，限速 1 req/s）")
     ok = 0
-    for i, (ban, name, addr) in enumerate(rows, 1):
-        pt = _resolve(addr, delay)
+    for i, b in enumerate(rows, 1):
+        pt = _resolve(b.address, delay)
         if pt:
-            conn.execute(
-                "update biz_registry set lat=?, lon=?, geocoded_at=datetime('now')"
-                " where ban=?", (pt[0], pt[1], ban))
+            db.set_biz_location(conn, b.ban, pt[0], pt[1])
             ok += 1
         else:
-            print(f"  [{i}/{len(rows)}] 解不出座標：{name}")
+            print(f"  [{i}/{len(rows)}] 解不出座標：{b.name}")
         if i % 10 == 0:
             conn.commit()
             print(f"  進度 {i}/{len(rows)}（成功 {ok}）")
