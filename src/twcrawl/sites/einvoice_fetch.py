@@ -24,7 +24,7 @@ from pathlib import Path
 
 from playwright.sync_api import BrowserContext
 
-from .. import db
+from .. import capture_index
 from . import einvoice
 
 API = "https://service-mc.einvoice.nat.gov.tw/btc/cloud/api"
@@ -99,28 +99,23 @@ def _post(page, url: str, body: str, is_json: bool = True) -> tuple[int, str]:
 
 
 class _Sink:
-    """把回應存成與 capture 相同的目錄結構，好讓既有的 ingest 直接吃。"""
+    """把回應存成與 capture 相同的目錄結構，好讓既有的 ingest 直接吃。
+
+    索引的形狀在 capture_index，與人工 capture 同一份——以前這裡自己組 dict，
+    於是 status 硬寫 200、url 放的是檔名字根，handoff 就把字根印成端點。
+    """
 
     def __init__(self, root: Path) -> None:
         self.root = root   # 目錄由 Workspace.new_capture 產生，形狀只有一份定義
-        self.index: list[dict] = []
-        self.seq = 0
+        self.index = capture_index.Index(root)
 
-    def add(self, name: str, text: str, post: str = "") -> None:
-        self.seq += 1
-        rel = f"responses/{self.seq:03d}_{name}.json"
+    def add(self, name: str, text: str, *, url: str, status: int,
+            post: str = "") -> None:
+        rel = f"responses/{self.index.next_seq:03d}_{name}.json"
         (self.root / rel).write_text(text, encoding="utf-8")
-        entry = {
-            "seq": self.seq, "kind": "response", "method": "POST", "status": 200,
-            "url": name, "content_type": "application/json",
-            "bytes": len(text.encode()), "file": rel,
-        }
-        if post:
-            entry["request_post_data"] = post
-        self.index.append(entry)
-        (self.root / "index.json").write_text(
-            json.dumps(self.index, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        self.index.response(url=url, method="POST", status=status,
+                            content_type="application/json",
+                            size=len(text.encode()), file=rel, post_data=post)
 
 
 class _AuthError(Exception):
@@ -152,7 +147,8 @@ def _fetch_month(
             raise _AuthError("登入已失效，請重跑 `twcrawl login`。")
         if status != 200:
             raise RuntimeError(f"第 {page_no + 1} 頁查詢失敗，HTTP {status}")
-        sink.add(f"searchCarrierInvoice_{year}{month:02d}_p{page_no}", text)
+        sink.add(f"searchCarrierInvoice_{year}{month:02d}_p{page_no}", text,
+                 url=url, status=status)
         try:
             data = json.loads(text)
         except ValueError:
@@ -170,7 +166,8 @@ def _fetch_month(
             status, text = _post(page, DETAIL_URL, t, is_json=False)
             if status != 200:
                 continue  # 個別明細失敗不中斷該月
-            sink.add(f"getCarrierInvoiceDetail_{year}{month:02d}", text, post=t)
+            sink.add(f"getCarrierInvoiceDetail_{year}{month:02d}", text,
+                     url=DETAIL_URL, status=status, post=t)
             n_detail += 1
         print(f"、明細 {n_detail} 份", end="")
     print(flush=True)
@@ -224,4 +221,6 @@ def fetch_range(
         print(f"\n⚠️ 下列月份未取得：{', '.join(failed)}（其餘已抓回，可單獨重跑該月）")
     print(f"\n抓取完成 → {sink.root}")
     res = einvoice.ingest(sink.root, conn)
-    return {"invoices": total_inv, "details": total_detail, **res}
+    # 鍵不能與 ingest 的回傳撞名：以前是 {"invoices": total_inv, **res}，
+    # res 也有 "invoices"（去重後入庫數），把抓取數靜靜蓋掉
+    return {"fetched_invoices": total_inv, "fetched_details": total_detail, **res}

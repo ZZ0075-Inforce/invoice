@@ -19,7 +19,7 @@ from typing import Any, Iterator
 
 from playwright.sync_api import BrowserContext
 
-from .. import db
+from .. import capture_index, db
 from ..browser import save_session, wait_for_operator
 
 HOME = "https://www.einvoice.nat.gov.tw/"
@@ -421,16 +421,7 @@ def parse_detail_json(path: Path, inv_num: str) -> list[dict]:
     return items
 
 
-def _load_index(capture_dir: Path) -> dict[str, dict]:
-    """index.json → {回應檔相對路徑: 索引項}。"""
-    p = capture_dir / "index.json"
-    if not p.exists():
-        return {}
-    try:
-        entries = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return {str(e.get("file", "")).replace("\\", "/"): e for e in entries}
+
 
 
 def _db_file(conn) -> str:
@@ -447,7 +438,7 @@ def _db_file(conn) -> str:
 def ingest(capture_dir: Path, conn) -> dict[str, int]:
     invoices: list[dict] = []
     items: list[dict] = []
-    index = _load_index(capture_dir)
+    index = capture_index.by_file(capture_dir)
 
     for p in sorted(capture_dir.rglob("*")):
         if not p.is_file():
@@ -457,7 +448,8 @@ def ingest(capture_dir: Path, conn) -> dict[str, int]:
             if not i and not d:
                 # 可能是「單張發票明細」：發票號碼在請求的 JWT 裡
                 rel = str(p.relative_to(capture_dir)).replace("\\", "/")
-                post = (index.get(rel) or {}).get("request_post_data", "")
+                entry = index.get(rel)
+                post = entry.post_data if entry else ""
                 inv_num = _jwt_invoice_number(post)
                 if inv_num:
                     d = parse_detail_json(p, inv_num)
