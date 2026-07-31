@@ -91,9 +91,21 @@ src/twcrawl/
 │                 session 以檔案路徑傳入，這個模組不知道工作區在哪
 ├── netcapture.py 攔截 XHR/下載 → captures/（隨錄隨寫 index.json）
 ├── tables.py     通用表格擷取 + 分頁（含截斷警告）
-├── db.py         SQLite schema 與 upsert（全部冪等，重跑安全）＋ seller_industries
-│                 讀取（店家名→稅籍行業，統編取該店家名下任一非空；半數發票不
-│                 帶統編，逐張查會讓同一家店在不同發票得到不同分類）
+├── db.py         SQLite schema 與 upsert（全部冪等，重跑安全）。讀取面**只收
+│                 不只一個 caller 要的**：`invoices()`／`invoice_items()` 吃同一組
+│                 過濾（since／months）並回傳 NamedTuple（解包與屬性都能用）——
+│                 過濾條件由 `_invoice_where(alias)` 出一份，join 版與單表版同源，
+│                 match 以前是把單表版字串 `.replace('inv_date','v.inv_date')`。
+│                 `invoices()` 保證 inv_date 非空且依日期升冪（儀表板的「最新發票」
+│                 與比對報告的列序都靠它；以前不帶 since 時沒有 order by，拿到的是
+│                 SQLite 儲存順序）。amount 的非空保護留在 export——只有它在加總。
+│                 `biz_registry()`／`upsert_biz()`／`set_biz_location()`：五個表裡
+│                 最後一個補上 helper 的（schema 與 migration 本來就在這，讀寫卻
+│                 散在 bizreg／geocode）；upsert 刻意不碰座標欄，重抓對照表不該
+│                 洗掉 geocode 解出的結果。`seller_industries()`（店家名→稅籍行業，
+│                 統編取該店家名下任一非空；半數發票不帶統編，逐張查會讓同一家店
+│                 在不同發票得到不同分類）。**一次性的聚合查詢留在原地**（FDA 來源
+│                 統計、常買品項 top3、max(inv_date)）——搬進來只是換個地方放 SQL
 ├── match.py      發票 × FDA 比對（店家/品項/警訊標題三層級；FDA 欄位名以關鍵字
 │                 自動定位。兩道精確化（2026-07-28 使用者回饋）：①品項/警訊層級
 │                 濾除餐飲現調店家——菜名撞包裝品名屬誤報（菜名×同名即食包），
@@ -370,6 +382,19 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   六份 golden 的畫面差異合計**只有一行**（固定支出說明多了實際門檻數字）。
   CONTEXT.md 的店家分類詞條同步改準：分析的分組單位是**發票的分類**不是店家
   ——品項覆寫上線後就不成立了，而同文件的非必要消費詞條早就寫對。測試 45/45
+- ✅ db.py 讀取面（2026-08-01，架構檢視 candidate 5）：**範圍比報告寫的窄**——
+  報告說收 `invoices_in_range()`，但實地看三個讀發票的地方，欄位重疊而**過濾
+  條件是三件不同的事**（export 要非空、lottery 比月份、match 比 since），硬收
+  成一個範圍讀取會變成參數化查詢建構器。改成共用**過濾器**而非共用查詢：
+  `invoices()`／`invoice_items()` 吃同一組 since／months，回傳 NamedTuple。
+  `match.py` 的 `cond.replace('inv_date','v.inv_date')` 因此消失（join 版與單表
+  版由 `_invoice_where(alias)` 同源產生）。biz_registry 補齊 upsert／lookup／
+  set_location，geocode 與 bizreg 不再手寫 SQL。原始 SQL：export 8→4、match 3→1、
+  geocode 2→0、bizreg 2→1。**驗證**：真實資料的 payload SHA256 零差異；
+  match 報告在 `--since` 那組逐位元組相同，不帶 since 那組**列相同、順序改變**
+  ——舊碼在該路徑沒有 `order by`，拿到的是 SQLite 儲存順序（未定義行為），
+  新碼一律日期升冪，已加測試釘住。順帶補上 COALESCE 不變式的測試（拿掉
+  COALESCE 會紅，訊息是人話）。測試 45/45
 - ⬜ 緩辦（要做先問）：CSV 匯出、分類趨勢圖、地圖店家搜尋
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

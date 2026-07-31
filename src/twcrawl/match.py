@@ -77,16 +77,9 @@ def run_match(conn, report_path: Path, classifier: Classifier,
             if len(nt) >= 4:
                 news.append((nt, str(title), src))
 
-    cond, args = ("and inv_date >= ?", [since]) if since else ("", [])
-    invs = conn.execute(
-        f"select inv_num, inv_date, seller_name from invoices where 1=1 {cond}", args
-    ).fetchall()
-    items = conn.execute(
-        "select i.inv_num, v.inv_date, v.seller_name, i.description "
-        "from invoice_items i join invoices v on v.inv_num = i.inv_num "
-        f"where i.description is not null {cond.replace('inv_date', 'v.inv_date')}",
-        args,
-    ).fetchall()
+    invs = db.invoices(conn, since=since)
+    items = [it for it in db.invoice_items(conn, since=since)
+             if it.desc is not None]
 
     print(f"FDA 清單 {len(fda_rows)} 筆（業者 {len(sellers)}、產品 {len(products)}、"
           f"警訊標題 {len(news)}）、發票 {len(invs)} 張、品項 {len(items)} 列"
@@ -94,17 +87,17 @@ def run_match(conn, report_path: Path, classifier: Classifier,
 
     # 發票 → 正規化品項（店家命中時做品項排除用）
     items_by_inv: dict[str, list[str]] = {}
-    for inv_num, _d, _s, desc in items:
-        nd = normalize(desc)
+    for it in items:
+        nd = normalize(it.desc)
         if len(nd) >= 3 and not nd.isdigit():
-            items_by_inv.setdefault(inv_num, []).append(nd)
+            items_by_inv.setdefault(it.inv_num, []).append(nd)
 
     # 店家層級：「上榜通路」本身沒有行動價值（不能因為超市上過榜就不去）。
     # 有品項明細時交叉檢查——發票品項與該業者名下下架產品全無交集就排除；
     # 只有無明細可查的發票保留純通路提示。
     seller_hits: list[dict] = []
     seller_clears: list[dict] = []
-    for inv_num, inv_date, sname in invs:
+    for inv_num, inv_date, sname, _amt in invs:
         n = normalize(sname)
         if len(n) < 3:
             continue
@@ -128,24 +121,25 @@ def run_match(conn, report_path: Path, classifier: Classifier,
     prod_hits: list[dict] = []
     news_hits: list[dict] = []
     eatery_skips: list[dict] = []
-    for inv_num, inv_date, sname, desc in items:
-        nd = normalize(desc)
+    for it in items:
+        nd = normalize(it.desc)
         if len(nd) < 3 or nd.isdigit():  # 純數字品項（價格/重量）必然誤報
             continue
-        eatery = cl.for_seller(sname).eatery
+        eatery = cl.for_seller(it.seller).eatery
+        side = f"{it.desc}（{it.seller}）"
         for np_, orig_p, orig_s, src in products:
             if nd in np_ or np_ in nd:
                 hit = {
-                    "level": "品項", "inv_num": inv_num, "inv_date": inv_date,
-                    "invoice_side": f"{desc}（{sname}）",
+                    "level": "品項", "inv_num": it.inv_num, "inv_date": it.date,
+                    "invoice_side": side,
                     "fda_side": f"{orig_p}（{orig_s}）", "source": src,
                 }
                 (eatery_skips if eatery else prod_hits).append(hit)
         for nt, orig_t, src in news:
             if nd in nt:  # 品項名稱出現在回收/警訊標題中
                 hit = {
-                    "level": "警訊標題", "inv_num": inv_num, "inv_date": inv_date,
-                    "invoice_side": f"{desc}（{sname}）",
+                    "level": "警訊標題", "inv_num": it.inv_num,
+                    "inv_date": it.date, "invoice_side": side,
                     "fda_side": orig_t, "source": src,
                 }
                 (eatery_skips if eatery else news_hits).append(hit)

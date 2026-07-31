@@ -1,11 +1,16 @@
-"""SQLite 儲存層。所有寫入都是 upsert，重跑不會產生重複資料。"""
+"""SQLite 儲存層。所有寫入都是 upsert，重跑不會產生重複資料。
+
+讀取面只收「不只一個 caller 要」的那幾種：發票與品項的過濾讀取（export／
+lottery／match 共用同一份條件）、稅籍登記的讀寫。一次性的聚合查詢（FDA 來源
+統計、常買品項 top3）留在原地——搬進來只是把 SQL 換個地方放。
+"""
 
 from __future__ import annotations
 
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, NamedTuple
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS invoices (
@@ -104,6 +109,117 @@ def seller_industries(conn: sqlite3.Connection) -> dict[str, str]:
         "  where seller_name is not null group by seller_name) v"
         " join biz_registry r on r.ban = trim(v.ban)"
         " where r.industry is not null")}
+
+
+class Invoice(NamedTuple):
+    """一張發票的表頭。`date` 保證非空——三個讀取端都靠它定位（export 分月、
+    lottery 比期別、match 比 since），所以那道保護在 invoices() 裡面。"""
+    num: str
+    date: str
+    seller: str | None
+    amount: float | None
+
+
+class Item(NamedTuple):
+    """一列品項，帶著所屬發票的日期與店家——比對與分月都要，而且過濾條件
+    本來就下在發票上。"""
+    inv_num: str
+    date: str
+    seller: str | None
+    row_no: int | None
+    desc: str | None
+    qty: float | None
+    price: float | None
+    amount: float | None
+
+
+class Biz(NamedTuple):
+    ban: str
+    name: str | None
+    address: str | None
+    industry: str | None
+    lat: float | None
+    lon: float | None
+
+
+def _invoice_where(alias: str, since: str | None,
+                   months: Iterable[str] | None) -> tuple[str, list[Any]]:
+    """發票的過濾條件。
+
+    `alias` 讓同一份條件同時能用在單表查詢與 join 查詢上——以前 match.py 是
+    把單表版的字串 `.replace('inv_date', 'v.inv_date')` 成 join 版，條件一旦
+    長出第二個欄位名就會出事。
+    """
+    cond, args = [f"{alias}.inv_date is not null"], []
+    if since:
+        cond.append(f"{alias}.inv_date >= ?")
+        args.append(since)
+    if months:
+        ms = list(months)
+        cond.append(f"substr({alias}.inv_date, 1, 7) in "
+                    f"({','.join('?' * len(ms))})")
+        args.extend(ms)
+    return " and ".join(cond), args
+
+
+def invoices(conn: sqlite3.Connection, *, since: str | None = None,
+             months: Iterable[str] | None = None) -> list[Invoice]:
+    """發票表頭，依日期升冪。
+
+    順序是 interface 的一部分：儀表板拿最後一筆當「最新發票」算資料鮮度。
+    """
+    where, args = _invoice_where("invoices", since, months)
+    return [Invoice(*r) for r in conn.execute(
+        "select inv_num, inv_date, seller_name, amount from invoices "
+        f"where {where} order by inv_date", args)]
+
+
+def invoice_items(conn: sqlite3.Connection, *, since: str | None = None,
+                  months: Iterable[str] | None = None) -> list[Item]:
+    """品項，依發票號碼與列號升冪；過濾條件與 invoices() 同一份實作。"""
+    where, args = _invoice_where("v", since, months)
+    return [Item(*r) for r in conn.execute(
+        "select i.inv_num, v.inv_date, v.seller_name, i.row_no, i.description,"
+        " i.quantity, i.unit_price, i.amount"
+        " from invoice_items i join invoices v on v.inv_num = i.inv_num"
+        f" where {where} order by i.inv_num, i.row_no", args)]
+
+
+def biz_registry(conn: sqlite3.Connection, *,
+                 needs_geocode: bool = False) -> list[Biz]:
+    """稅籍登記。needs_geocode=True 只給有地址但還沒座標的（geocode 用）。"""
+    where = ("where address is not null and address != '' and lat is null"
+             if needs_geocode else "")
+    return [Biz(*r) for r in conn.execute(
+        "select ban, name, address, industry, lat, lon "
+        f"from biz_registry {where}")]
+
+
+def upsert_biz(conn: sqlite3.Connection,
+               rows: Iterable[dict[str, Any]]) -> int:
+    """稅籍登記 upsert。座標欄不動——它由 geocode 另外寫，重抓對照表不該
+    把已解出的座標洗掉。"""
+    n = 0
+    for r in rows:
+        conn.execute(
+            "insert into biz_registry (ban, name, address, industry,"
+            " industry_codes) values (:ban,:name,:address,:industry,:codes)"
+            " on conflict(ban) do update set name=excluded.name,"
+            " address=excluded.address, industry=excluded.industry,"
+            " industry_codes=excluded.industry_codes,"
+            " fetched_at=datetime('now')",
+            {k: r.get(k) for k in ("ban", "name", "address", "industry",
+                                   "codes")})
+        n += 1
+    conn.commit()
+    return n
+
+
+def set_biz_location(conn: sqlite3.Connection, ban: str,
+                     lat: float, lon: float) -> None:
+    conn.execute(
+        "update biz_registry set lat=?, lon=?, geocoded_at=datetime('now')"
+        " where ban=?", (lat, lon, ban))
 
 
 def upsert_invoices(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> int:
