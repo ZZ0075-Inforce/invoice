@@ -16,7 +16,8 @@ FDA 目前接三個來源：中聯油脂案專區強制下架清單（edible_oil
 ```
 pip install -e .                      # 一律 editable；PyPI 上的 twcrawl 是無關的舊套件
 python -m playwright install chromium # playwright 指令找不到時用這個
-python tests/test_twcrawl.py          # 測試（42/42，不用 pytest）
+python tests/test_twcrawl.py          # 測試（45/45，不用 pytest）
+python tests/test_twcrawl.py --update-golden   # 有意改動四頁畫面後重生 tests/golden/
 
 # 每月例行（一鍵；fetch 區間自動推算、FDA 回溯 90 天只給 feed 型來源）
 twcrawl update                        # login→fetch→fda→match→lottery→export→backup
@@ -313,6 +314,30 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   所以逃出的 `SystemExit` 會靜默中止整輪。測試 42/42（新增工作區與 CLI
   端到端各一；兩個 `os.chdir` 測試不再需要 chdir；備份測試補上 `state/`，
   ADR-0001 的紅線第一次真的被驗證）
+- ✅ 四頁測試表面（2026-07-31，架構檢視 candidate 4 的步驟 1／共三步）：1,650 行
+  頁面 JS 從零覆蓋變成有回歸網。關鍵是**合成 payload**——史上寫過十幾個煙霧
+  腳本全都指向 `out/`，斷言帶真實金額與店家名，結構上進不了 repo 只能丟掉；
+  頁面的 interface 是 `window.TWCRAWL_DATA` → DOM，資料庫不在其中，所以
+  `a_payload()` 直接造，形狀由 `test_payload_contract` 與 `build_payload` 對齊
+  （`fda.match`／`months[].byCategory` 是以領域值為鍵的對照表，不比鍵）。
+  三個新測試：①六份 golden 結構快照（含 `?view=fixed`／`?cat=`／`?src=` 深連結
+  變體，`--update-golden` 重生；`staleDays` 是唯一的牆上時鐘，正規化掉）
+  ②惡意字串不進 DOM ＋ 殘缺 payload 不讓整頁空白 ③形狀契約。
+  順帶修掉兩個附錄缺陷（先修才拍快照，否則零差異的基準是錯的）：dashboard
+  **沒有 `esc`**（另外三頁都有）——店家/分類/行業/常買品項直接進 `innerHTML`，
+  實測注入 9 個節點；`lot.next.drawDate` 無防護——null 會在 `app.innerHTML=""`
+  之後 throw，畫面與「找不到 data.js」一模一樣。兩個修正都經「還原後測試必須
+  變紅」驗證過。測試 42→45（Chromium 啟動 7→9）
+- ⬜ 步驟 2／3（已 grilling 定案，見下）：抽 `ui.js`（核心是 `TW.page({needs,
+  render})`：theme、payload 判斷、**錯誤圍堵**、nav；`esc`/`nt`/`el`/`catColor`
+  順帶）＋ `ui.css`（只搬逐字相同的：色票與 88 行共同版面；`#savebar button`、
+  `--warning` 這些已分歧的留原地，才維持行為零差異）。兩者走 `<script src>`／
+  `<link>`，**不可改 ES module**（file:// 下 `import` 被 CORS 擋，與 data.js 同因）。
+  步驟 3 衍生歸一：界線是「誰決定它」——Python 出 `periodLabel`／`ruleText`
+  （門檻改了文案跟著改），ui.js 算篩選後的月分桶與 rollup、格式與顏色；payload
+  拿掉 `unnecessary[]`／`fda.match`／`lottery.uncovered`＋`months`＋`claimStart`。
+  **三份 seller rollup 不要收斂**——它們是三個不同的問題，且地圖那份的期間是
+  互動參數，必然在客戶端（架構報告原本寫成「重複」，是誤判）
 - ⬜ 緩辦（要做先問）：CSV 匯出、分類趨勢圖、地圖店家搜尋
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

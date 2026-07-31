@@ -1,0 +1,59 @@
+#app
+  header
+    h1  "twcrawl 查詢頁"
+    div.sub
+      a.map  "← 回儀表板"
+      a.map  "🛡 食安頁"
+      a.map  "🗺 消費地圖"
+    button.theme  "🌗 自動"
+  div.chips
+    button.chip.on  "發票清單"
+    button.chip  "店家查詢"
+    button.chip  "固定支出"
+  div
+    div.card
+      h2  "搜尋與篩選"
+      div.desc  "關鍵字比對店家（含公司名）、品名、發票號碼、日期（如 2026-04-26）；條件之間是 AND"
+      div.filters
+        input
+        label  "月份 ～"
+          input
+          input
+        label  "分類"
+          select
+            option  "全部"
+            option  "電信"
+            option  "超市"
+            option  "手搖飲"
+            option  "未分類"
+        label  "金額 ～"
+          input
+          input
+        label  "只看非必要"
+          input
+      div.stat
+        span  "2 張發票・NT$120"
+        button.linkish  "另存 CSV"
+      div.scrollx
+        table
+          tbody
+            tr
+              th.sortable  "日期 ▼"
+              th  "店家"
+              th  "分類"
+              th.num.sortable  "金額"
+              th  "發票號碼"
+            tr.inv
+              td  "2026-06-05"
+              td  "珍奶測試店"
+              td  "手搖飲"
+              td.num  "60"
+              td  "AA9"
+            tr.inv
+              td  "2026-04-18"
+              td  "珍奶測試店"
+              td  "手搖飲"
+              td.num  "60"
+              td  "AA4"
+      div.more
+  div.note  "資料截至 2026-07-31 09:00・全部在本機運算、不外連（docs/adr/0002）・品項與發票號碼只存在本機 data.js"

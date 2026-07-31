@@ -1,0 +1,243 @@
+#app
+  header
+    h1  "twcrawl 消費儀表板"
+    div.sub
+      a.map  "🔍 查詢頁（搜尋、店家查詢、固定支出）"
+      a.map  "🛡 食安頁（FDA 比對）"
+      a.map  "🗺 消費地圖（開啟時會載入 OSM 圖磚）"
+      span  "發票到 2026-06-05"
+      span  "⚠ 已 N 天沒有新發票——記得跑 twcrawl update"
+    button.theme  "🌗 自動"
+  div.tiles
+    div.tile
+      div.label  "本期支出（6月）"
+      div.value  "NT$360"
+      div.delta.good  "-60.0% vs 5月"
+      div.delta
+        a.map  "看該月發票"
+    div.tile
+      div.label  "月均支出"
+      div.value  "NT$692"
+      div.delta  "4 個月・共 9 張發票"
+    div.tile
+      div.label  "每月固定支出"
+      div.value  "NT$588"
+      div.delta  "1 項進行中——"
+        a.map  "在查詢頁檢視"
+    div.tile
+      div.label  "非必要消費累計"
+      div.value  "NT$120"
+      div.delta  "2 筆——"
+        a.map  "在查詢頁檢視"
+    div.tile
+      div.label  "FDA 比對命中"
+      div.value  "2 筆"
+      div.delta  "⚠ 命中≠買到問題商品——"
+        a.map  "明細在食安頁"
+    div.tile
+      div.label  "統一發票對獎"
+      div.value  "NT$200"
+      div.delta  "🎉 1 筆——別忘了領獎"
+      div.delta  "5 張待 9/25 開獎"
+  div.card
+    h2  "🎉 中獎發票（1 筆・共 NT$200）"
+    div.desc  "傳統獎項（特別獎～六獎）比對結果；雲端發票專屬獎另以平台歸戶通知為準"
+    div.scrollx
+      table
+        tbody
+          tr
+            th  "期別"
+            th  "獎別"
+            th.num  "獎金"
+            th  "發票號碼"
+            th  "日期"
+            th  "店家"
+            th  "領獎期限"
+          tr
+            td  "115年03-04月"
+            td  "六獎"
+            td.num  "NT$200"
+            td
+              a.map  "AA3"
+            td  "2026-04-05"
+            td  "測試電信"
+            td  "2026-09-05"
+  div.card
+    h2  "每月支出（依店家分類）"
+    div.desc  "滑過看明細、點柱子進查詢頁；點圖例看單一分類趨勢，再點一次回全部"
+    div.legend
+      button.leg  "電信"
+        i.swatch
+      button.leg  "超市"
+        i.swatch
+      button.leg  "手搖飲"
+        i.swatch
+      button.leg  "其他（含未分類）"
+        i.swatch
+    div
+      svg [line*5 path*9 rect*4 text*13]
+    details
+      summary  "以表格檢視"
+      div.scrollx
+        table
+          tbody
+            tr
+              th  "月份"
+              th.num  "電信"
+              th.num  "超市"
+              th.num  "手搖飲"
+              th.num  "其他（含未分類）"
+              th.num  "合計"
+            tr
+              td  "2026-03"
+              td.num  "599"
+              td.num  "250"
+              td.num  "0"
+              td.num  "0"
+              td.num  "849"
+            tr
+              td  "2026-04"
+              td.num  "599"
+              td.num  "0"
+              td.num  "60"
+              td.num  "0"
+              td.num  "659"
+            tr
+              td  "2026-05"
+              td.num  "599"
+              td.num  "200"
+              td.num  "0"
+              td.num  "100"
+              td.num  "899"
+            tr
+              td  "2026-06"
+              td.num  "0"
+              td.num  "300"
+              td.num  "60"
+              td.num  "0"
+              td.num  "360"
+  div.card
+    h2  "消費日曆"
+    div.desc  "一天一格、顏色深＝當日花得多（非零日四分位分階）；滑過看金額筆數、點格子到查詢頁看該日發票"
+    svg [rect*98 text*10]
+    details
+      summary  "以表格檢視"
+      div.scrollx
+        table
+          tbody
+            tr
+              th  "月份"
+              th.num  "一"
+              th.num  "二"
+              th.num  "三"
+              th.num  "四"
+              th.num  "五"
+              th.num  "六"
+              th.num  "日"
+            tr
+              td  "2026-03"
+              td.num  "—"
+              td.num  "—"
+              td.num  "—"
+              td.num  "849"
+              td.num  "—"
+              td.num  "—"
+              td.num  "—"
+            tr
+              td  "2026-04"
+              td.num  "—"
+              td.num  "—"
+              td.num  "—"
+              td.num  "—"
+              td.num  "—"
+              td.num  "60"
+              td.num  "599"
+            tr
+              td  "2026-05"
+              td.num  "—"
+              td.num  "699"
+              td.num  "—"
+              td.num  "—"
+              td.num  "—"
+              td.num  "—"
+              td.num  "200"
+            tr
+              td  "2026-06"
+              td.num  "300"
+              td.num  "—"
+              td.num  "—"
+              td.num  "—"
+              td.num  "60"
+              td.num  "—"
+              td.num  "—"
+  div.cols
+    div.card
+      h2  "分類累計"
+      div.desc  "全期間各分類總支出；非必要分類以 ⚠ 標示；點列到查詢頁篩選"
+      svg [path*4 rect*4 text*8]
+    div.card
+      h2  "店家排行（前 10）"
+      div.desc  "全期間消費金額最高的店家；點列到查詢頁鑽取"
+      svg [a*4 path*4 rect*4 text*12]
+  div.card
+    h2  "非必要消費（2 筆・NT$120）"
+    div.desc  "判準掛在店家分類（預設：手搖飲、甜點零食、咖啡）——超市裡買的零食抓不到；要改判準就編輯 categories.local.json 的 unnecessary 欄位——"
+      a.map  "在查詢頁篩選檢視"
+    div.scrollx
+      table
+        tbody
+          tr
+            th  "日期"
+            th  "店家"
+            th  "分類"
+            th.num  "金額"
+            th
+          tr
+            td  "2026-06-05"
+            td  "珍奶測試店"
+            td  "手搖飲"
+            td.num  "60"
+            td
+              a.map  "地圖"
+          tr
+            td  "2026-04-18"
+            td  "珍奶測試店"
+            td  "手搖飲"
+            td.num  "60"
+            td
+              a.map  "地圖"
+  div.card
+    h2  "未分類店家（金額前 1 名）"
+    div.desc  "「查這家」看該店逐張發票與品項再判斷；填分類按「複製」取得規則片段，貼進 categories.local.json 後重跑 twcrawl export；或改用 在頁面上直接存檔（並可填招牌名）"
+      code  "twcrawl serve"
+    div.scrollx
+      datalist
+        option
+        option
+        option
+      table
+        tbody
+          tr
+            th  "店家"
+            th  "稅籍行業"
+            th  "常買品項"
+            th.num  "金額"
+            th.num  "筆數"
+            th  "分類"
+            th
+            th
+          tr
+            td  "神秘測試舖"
+              div
+                a.map  "查這家"
+            td  "其他綜合零售"
+            td  "—"
+            td.num  "100"
+            td.num  "1"
+            td
+              input.catin
+            td
+              button.rule  "複製"
+            td
+              a.map  "地圖"
+  div.note  "資料截至 2026-07-31 09:00 由 twcrawl export 產生・全部在本機、不自動外連、不上雲（docs/adr/0001）・「地圖」連結點擊時才會把店名帶去 Google 搜尋"

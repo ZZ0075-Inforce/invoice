@@ -282,10 +282,13 @@ twcrawl probe <url> # 頁面結構偵察報告（表格 id、表頭、分頁連�
 ## 測試
 
 ```powershell
-python tests\test_twcrawl.py     # 42 個測試，不需要 pytest
+python tests\test_twcrawl.py                    # 45 個測試，不需要 pytest
+python tests\test_twcrawl.py --update-golden    # 有意改動畫面後重生頁面快照
 ```
 
 表格擷取與分頁以本機模擬的 ASP.NET 頁面驗證（含「分頁點了沒反應」與「下一頁提前消失」兩種真實壞掉情境）；解析器、比對、日期邊界、摘要遮蔽則以實際資料形狀驗證。測試會實際啟動 headless Chromium，需先完成 `playwright install`。
+
+四個頁面以**合成 payload**（`a_payload()`）在 headless Chromium 裡實際渲染，斷言零 JS 錯誤、店家名不會被當 HTML 執行、殘缺的 data.js 不會讓整頁空白；畫面結構存成 `tests/golden/*.txt` 快照，有意改動畫面後跑 `--update-golden` 重生並審閱 diff。合成 payload 的形狀由 `test_payload_contract` 與 `export.build_payload` 對齊。
 
 ---
 
