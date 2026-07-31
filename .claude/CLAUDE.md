@@ -252,8 +252,10 @@ src/twcrawl/
 - CSV 匯出：`triggerInvoiceDetailExport` → `downloadInvoiceDetailCSV/<id>`；新版格式為
   UTF-8 BOM 含表頭寬表、一列一品項、品項欄掛 `消費明細_` 前綴（舊 M/D 格式保留後備解析）
 - `invoiceDate` 是 UTC ISO 時間戳（`…T16:00:00Z` = 台北隔日）——`_norm_date` 已 +8 轉台北日期
-- `invoiceStrStatus` 是狀態碼（INVOICE0003S…）；code→中文對照在 capture 到的
-  `com001i/statusCodes/zh`，尚未使用
+- `invoiceStrStatus` 是狀態碼（INVOICE0003S…）。**`com001i/statusCodes/zh`
+  字典實測只有 UI 訊息碼、沒有發票狀態碼**（2026-08-01 live 驗證 portal 與
+  btc/cloud 兩份；此前記載有誤）——翻譯走 `export.INVOICE_STATUS_ZH` 靜態
+  對照，只收實測可對應的碼，未收錄原樣顯示
 
 ## 關鍵教訓（改 browser/netcapture 前必讀）
 
@@ -509,6 +511,15 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   一併修）、year.months→monthCount（與頂層 months 同名異義）、sub 文案
   改成兩種情形都為真（不寫「今年」）、對獎磚標「已開獎期別」、樣式註解
   改實話（抄的是 dashboard 變體）。測試 54/54（新頁走既有測試面）
+- ✅ 發票狀態翻中文（2026-08-01，issue #14）：**PRD 的來源前提實測不成立**
+  ——statusCodes 字典（portal 與 btc/cloud 都 live 驗過）只有 UI 訊息碼，
+  沒有 INVOICE 狀態碼，公開網路也搜不到文件。改保守對照
+  `export.INVOICE_STATUS_ZH`（只收實測可對應的 `INVOICE0003S`→開立；庫內
+  431 張全部命中、54 張 CSV 舊來源無狀態），未收錄碼原樣進 payload 不吞
+  資訊。翻譯在匯出端做完（invoices[].status），查詢頁：非常態才在號碼旁
+  標（開立不佔列上版面）、展開明細一律顯示狀態行；惡意測試補「點開全部
+  發票列」讓狀態行與品項表的跳脫被實際渲染。不需重抓（inv_status 已入
+  庫）。測試 54/54
 - ⬜ 緩辦（要做先問）：CSV 匯出（分類趨勢圖已做＝#11；地圖店家搜尋立案為 #15）
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

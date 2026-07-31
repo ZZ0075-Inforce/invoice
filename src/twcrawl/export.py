@@ -123,6 +123,13 @@ def _load_slots(path: Path) -> dict[str, int]:
         return {}
 
 
+# 發票狀態碼→中文（issue #14）。PRD 記載的來源（capture 到的 com001i/
+# statusCodes 字典）實測只有 UI 訊息碼、沒有發票狀態碼，所以這份對照只收
+# 實測可對應的碼：庫內全部正常開立發票都帶 INVOICE0003S。未收錄的碼原樣
+# 進 payload——查詢頁顯示原始碼不吞資訊，新碼出現時在這裡補一行即可。
+INVOICE_STATUS_ZH = {"INVOICE0003S": "開立"}
+
+
 def load_budget(path: Path) -> dict | None:
     """讀預算設定（budget.local.json）；沒有檔或空設定回 None → payload 無
     budget 區塊 → 儀表板無磚。
@@ -260,6 +267,9 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
     invs = [v for v in db.invoices(conn) if v.amount is not None]
 
     items = _items_by_invoice(conn)
+    # 單一 caller 的一次性查詢，照 db.py 的界線留在原地；翻譯在這裡做完，
+    # 頁面拿到的就是中文（或未收錄的原始碼），不再解讀狀態碼
+    status_raw = dict(conn.execute("select inv_num, inv_status from invoices"))
     months: dict[str, dict] = {}
     cats: dict[str, dict] = {}
     sellers: dict[str, dict] = {}
@@ -297,9 +307,11 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
         # 非必要消費不另存一份清單：判準是 categories[].unnecessary 這個旗標，
         # 頁面用它篩 invoices 就好——以前兩種編碼並存，查詢頁用旗標、月報用
         # 清單，同一件事兩個答案
+        st = status_raw.get(num)
         invoice_rows.append({"num": num, "date": str(inv_date)[:10],
                              "seller": si["display"], "category": cat.name,
-                             "amount": amount, "items": inv_items})
+                             "amount": amount, "items": inv_items,
+                             "status": INVOICE_STATUS_ZH.get(st, st)})
 
     for mon in months.values():
         mon["byCategory"] = dict(mon["byCategory"])

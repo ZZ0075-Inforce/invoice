@@ -61,6 +61,7 @@
               td  "未分類"
               td.num  "100"
               td  "AA7"
+                span  "（INVOICE0099X）"
             tr.inv
               td  "2026-05-10"
               td  "測試超市"

@@ -1505,7 +1505,9 @@ def test_export_items_and_query_page():
         try:
             db.upsert_invoices(conn, [
                 an_invoice("DD1", "2026-05-03", "五十嵐測試店", 60.0,
-                           card_no="/SECRET99"),
+                           card_no="/SECRET99", inv_status="INVOICE0003S"),
+                an_invoice("DD2", "2026-05-04", "五十嵐測試店", 55.0,
+                           inv_status="INVOICE0042X"),
             ])
             db.upsert_items(conn, [
                 an_item("DD1", 1, "珍珠鮮奶茶", 60.0, quantity=1,
@@ -1517,6 +1519,10 @@ def test_export_items_and_query_page():
             assert row["num"] == "DD1", "發票列應帶發票號碼（查詢頁對帳用）"
             assert row["items"][0]["desc"] == "珍珠鮮奶茶"
             assert row["items"][0]["price"] == 60.0
+            # 狀態翻中文（issue #14）：已收錄→中文；未收錄→原始碼不吞資訊
+            assert row["status"] == "開立", row["status"]
+            assert payload["invoices"][1]["status"] == "INVOICE0042X", \
+                "未收錄的狀態碼要原樣進 payload，不是 None 也不是空字串"
             assert "SECRET99" not in json.dumps(payload, ensure_ascii=False), \
                 "載具號碼永不進 data.js（ADR-0002）"
 
@@ -2057,8 +2063,12 @@ def a_payload(**overrides) -> dict:
         ("AA8", "2026-06-01", "測試超市", "超市", 300.0, [("米", 300.0)]),
         ("AA9", "2026-06-05", "珍奶測試店", "手搖飲", 60.0, [("珍珠鮮奶茶", 60.0)]),
     ]
+    # 狀態（issue #14）：多數「開立」；AA2 給 None（CSV 舊來源沒有狀態）、
+    # AA7 給未收錄碼——原始碼要照樣顯示，不吞資訊
+    status = {"AA2": None, "AA7": "INVOICE0099X"}
     invoices = [
         {"num": n, "date": d, "seller": s, "category": c, "amount": a,
+         "status": status.get(n, "開立"),
          "items": [{"desc": desc, "qty": 1, "price": amt, "amount": amt}
                    for desc, amt in items]}
         for n, d, s, c, a, items in inv
@@ -2397,7 +2407,8 @@ def test_pages_survive_hostile_and_edge_payloads():
     xss = '<twcrawl-xss></twcrawl-xss>"'
     hostile = _replace_strings(
         a_payload(), {"珍奶測試店": "珍奶" + xss, "手搖飲": "手搖" + xss,
-                      "其他綜合零售": "零售" + xss, "六獎": "六獎" + xss})
+                      "其他綜合零售": "零售" + xss, "六獎": "六獎" + xss,
+                      "INVOICE0099X": "狀態" + xss})
 
     lot = a_payload()["lottery"]
     edges = [
@@ -2423,12 +2434,15 @@ def test_pages_survive_hostile_and_edge_payloads():
             for page_name in PAGE_ROOTS:
                 page, errs = _open(ctx, out, page_name)
                 assert not errs, f"{page_name} 吃到惡意字串就出錯：{errs}"
-                # 儀表板多數跳脫點在 tooltip，要派事件才會渲染
+                # 儀表板多數跳脫點在 tooltip、查詢頁的狀態行與品項表在展開
+                # 列——都要派事件才會渲染
                 page.evaluate("""() => {
                   for (const r of document.querySelectorAll(
                       "svg rect[fill='transparent']"))
                     r.dispatchEvent(new MouseEvent("mousemove",
                       {clientX: 20, clientY: 20, bubbles: true}));
+                  for (const tr of document.querySelectorAll("tr.inv"))
+                    tr.click();
                 }""")
                 n = page.evaluate(
                     "document.querySelectorAll('twcrawl-xss').length")
