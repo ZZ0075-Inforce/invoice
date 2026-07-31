@@ -79,8 +79,7 @@ def _items_by_invoice(conn) -> dict[str, list[dict]]:
 N_SLOTS = 6
 
 
-def assign_slots(prev: dict[str, int], ranked: list[str],
-                 n_slots: int = N_SLOTS) -> dict[str, int]:
+def assign_slots(prev: dict[str, int], ranked: list[str]) -> dict[str, int]:
     """色槽指派：在榜者沿用舊槽、新進者取最小空槽、槽滿時向落榜持有者收回。
 
     穩定性契約：輸入不變則輸出不變；排名變動不改既有持有者的槽；收回只
@@ -88,17 +87,17 @@ def assign_slots(prev: dict[str, int], ranked: list[str],
     ranked 裡的先收，再收名次最低的）。回傳含未在榜但仍持槽者——分類
     短暫消失（該期零消費）再回來時拿回同一色。
     """
-    top = ranked[:n_slots]
+    top = ranked[:N_SLOTS]
     out = dict(prev)
     for name in top:
         if name in out:
             continue
-        free = sorted(set(range(1, n_slots + 1)) - set(out.values()))
+        free = sorted(set(range(1, N_SLOTS + 1)) - set(out.values()))
         if free:
             out[name] = free[0]
             continue
         fallen = [n for n in out if n not in top]
-        if not fallen:      # 理論上到不了：top 與持有者都不超過 n_slots
+        if not fallen:      # 理論上到不了：top 與持有者都不超過 N_SLOTS
             break
         worst = max(fallen, key=lambda n: (ranked.index(n) if n in ranked
                                            else len(ranked)))
@@ -107,14 +106,16 @@ def assign_slots(prev: dict[str, int], ranked: list[str],
 
 
 def _load_slots(path: Path) -> dict[str, int]:
-    """讀回上次的指派。壞檔（手改壞、槽號超界、槽重複）整份放棄重指派——
-    色槽只是外觀延續性，不值得為它中斷匯出。"""
+    """讀回上次的指派。壞檔（手改壞、槽號超界或重複、bool 冒充槽號、
+    未分類佔槽）整份放棄重指派——色槽只是外觀延續性，不值得為它中斷
+    匯出；「未分類永遠中性灰」則是不變式，不能被手改的狀態檔繞過。"""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
         out: dict[str, int] = {}
         for name, slot in raw.items():
-            if not (isinstance(name, str) and isinstance(slot, int)
-                    and 1 <= slot <= N_SLOTS and slot not in out.values()):
+            if (not isinstance(name, str) or name == UNCATEGORIZED
+                    or not isinstance(slot, int) or isinstance(slot, bool)
+                    or not 1 <= slot <= N_SLOTS or slot in out.values()):
                 return {}
             out[name] = slot
         return out

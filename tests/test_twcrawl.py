@@ -1120,11 +1120,16 @@ def test_catslots_stable_across_exports():
             assert p3["categories"][0]["name"] == "手搖飲", \
                 "categories 仍依金額排序——順序歸排序、顏色歸槽位"
 
-            # 狀態檔壞掉：整份放棄重指派，匯出不得中斷
-            ws.state_path("catslots").write_text("not json", encoding="utf-8")
-            s4 = {c["name"]: c["slot"]
-                  for c in export.build_payload(conn, ws, cl)["categories"]}
-            assert sorted(v for v in s4.values() if v) == [1, 2, 3], s4
+            # 狀態檔壞掉／手改出違規內容：整份放棄重指派，匯出不得中斷；
+            # 「未分類永遠中性灰」不能被手改的狀態檔繞過
+            for bad in ("not json",
+                        json.dumps({"未分類": 1}, ensure_ascii=False),
+                        json.dumps({"超市": True})):
+                ws.state_path("catslots").write_text(bad, encoding="utf-8")
+                s4 = {c["name"]: c["slot"]
+                      for c in export.build_payload(conn, ws, cl)["categories"]}
+                assert sorted(v for v in s4.values() if v) == [1, 2, 3] \
+                    and s4["未分類"] is None, (bad, s4)
         finally:
             conn.close()  # Windows：先關連線才能清 TemporaryDirectory
     print("✓ 色槽指派：兩次匯出逐槽相同、排名變動不換色、新進取空槽")
@@ -2368,6 +2373,53 @@ def test_pages_survive_hostile_and_edge_payloads():
                     assert filled, f"{page_name}／{label}：整頁空白"
                     page.close()
     print("✓ 四頁：惡意字串不進 DOM、殘缺 payload 不讓整頁空白")
+
+
+def test_pages_color_by_slot_not_rank():
+    """頁面取色跟 slot 走、不跟金額排名走（issue #10 驗收 3）。
+
+    golden 的 fixture slot 恰與排名重合（首次指派＝排名序），擋不住
+    「ui.js 回歸成當期排名取前六」——這裡把 slot 與排名刻意錯開，直接
+    斷言 dashboard 與 map 圖例 swatch 的實際顏色落在指派的槽色上。
+    """
+    from twcrawl.workspace import Workspace
+
+    permuted = {"電信": 3, "超市": 1, "手搖飲": 6, "未分類": None}
+    payload = a_payload(categories=[{**c, "slot": permuted[c["name"]]}
+                                    for c in a_payload()["categories"]])
+
+    js = """() => {
+      const norm = c => { const d = document.createElement("i");
+        d.style.color = c; document.body.appendChild(d);
+        const v = getComputedStyle(d).color; d.remove(); return v; };
+      const slot = n => norm(getComputedStyle(document.documentElement)
+        .getPropertyValue("--s" + n).trim());
+      const got = {};
+      for (const b of document.querySelectorAll(
+          ".legend button.leg, #legend button.leg")) {
+        const sw = b.querySelector("i.swatch");
+        if (sw) got[b.textContent.trim()] =
+          norm(getComputedStyle(sw).backgroundColor);
+      }
+      return { got, s1: slot(1), s3: slot(3), s6: slot(6) };
+    }"""
+
+    with TemporaryDirectory() as td:
+        out = _stage_pages(Workspace(Path(td)), payload)
+        with browser_context(session_file=None, headed=False) as ctx:
+            _stub_tiles(ctx)
+            for page_name in ("dashboard.html", "map.html"):
+                page, errs = _open(ctx, out, page_name)
+                assert not errs, f"{page_name}：{errs}"
+                r = page.evaluate(js)
+                for name, key in (("電信", "s3"), ("超市", "s1"),
+                                  ("手搖飲", "s6")):
+                    assert r["got"].get(name) == r[key], (
+                        f"{page_name} 的「{name}」swatch 應取指派的槽色 "
+                        f"--{key}，實得 {r['got'].get(name)!r}"
+                        "——取色不得回到金額排名")
+                page.close()
+    print("✓ 取色跟槽位走：slot 與排名錯開時，dashboard 與 map 仍照指派上色")
 
 
 def test_payload_contract():

@@ -16,7 +16,7 @@ FDA 目前接三個來源：中聯油脂案專區強制下架清單（edible_oil
 ```
 pip install -e .                      # 一律 editable；PyPI 上的 twcrawl 是無關的舊套件
 python -m playwright install chromium # playwright 指令找不到時用這個
-python tests/test_twcrawl.py          # 測試（49/49，不用 pytest）
+python tests/test_twcrawl.py          # 測試（51/51，不用 pytest）
 python tests/test_twcrawl.py --update-golden   # 有意改動四頁畫面後重生 tests/golden/
 
 # 每月例行（一鍵；fetch 區間自動推算、FDA 回溯 90 天只給 feed 型來源）
@@ -454,8 +454,12 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   dashboard 兩處取色改走 cats.of/at、`SLOTS` 陣列刪除；map 零改動。首次
   指派＝舊排名順序，六份 golden 逐位元組零 diff；色票未動，dataviz 驗證器
   亮暗兩模式重跑全過（亮色 3 槽 <3:1 的 WARN 是既有狀態，月報有直接標籤
-  與表格作 relief）。測試 49→50（純函式指派規則＋匯出兩次逐槽相同＋壞
-  狀態檔不中斷匯出）
+  與表格作 relief）。兩軸 code review 後補三件：`_load_slots` 擋 bool 與
+  「未分類」佔槽（不變式不能被手改狀態檔繞過）、刪 `assign_slots` 無人用的
+  `n_slots` 參數、新增「slot 與排名刻意錯開」的頁面取色測試——golden 的
+  fixture slot 恰與排名重合，擋不住 ui.js 回歸成排名取色，這支直接斷言
+  dashboard 與 map 圖例 swatch 落在指派槽色上（退回排名取色驗證過會紅）。
+  測試 49→51
 - ⬜ 緩辦（要做先問）：CSV 匯出、分類趨勢圖、地圖店家搜尋
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive
