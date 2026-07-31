@@ -62,6 +62,30 @@
     };
   }
 
+  /** 非必要分類的名字集合。判準是 categories[].unnecessary 這個旗標，
+   *  頁面拿它篩 invoices——payload 不另外帶一份非必要清單。 */
+  function unnecessaryCats(categories) {
+    return new Set((categories || [])
+      .filter(c => c.unnecessary).map(c => c.name));
+  }
+
+  /** 一組發票在各月份的合計。月份清單由 payload 的 months 決定（含零的月，
+   *  折線才不會跳過空月）；發票是頁面篩過的，所以這一步只能在客戶端算。 */
+  function monthTotals(invoices, months) {
+    return (months || []).map(m => ({
+      month: m.month,
+      v: (invoices || [])
+        .filter(v => v.date.slice(0, 7) === m.month)
+        .reduce((s, v) => s + v.amount, 0),
+    }));
+  }
+
+  /** 月份區間 → 日期字串邊界。日期一律 YYYY-MM-DD 且比較用字串比，所以
+   *  上界取 "-31" 對每個月都成立（不必知道當月幾天）。 */
+  function monthBounds(fromM, toM) {
+    return { from: fromM ? fromM + "-01" : "", to: toM ? toM + "-31" : "" };
+  }
+
   /**
    * 頁面骨架。
    *
@@ -96,6 +120,7 @@
     }
   }
 
-  const TW = { THEMES, SLOTS, esc, nt, css, el, themeButton, catColors, page };
+  const TW = { THEMES, SLOTS, esc, nt, css, el, themeButton, catColors,
+               unnecessaryCats, monthTotals, monthBounds, page };
   window.TW = TW;
 })();

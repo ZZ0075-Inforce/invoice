@@ -764,8 +764,11 @@ def test_export_builds_dashboard():
             assert [m["month"] for m in payload["months"]] == ["2026-05", "2026-06"]
             assert payload["months"][0]["total"] == 360.0
             assert payload["categories"][0]["name"] == "超市", "分類應依金額排序"
-            assert len(payload["unnecessary"]) == 1
-            assert payload["unnecessary"][0]["amount"] == 60.0
+            # 非必要判準掛在分類旗標上，payload 不另存一份清單——頁面拿
+            # 旗標篩 invoices 就好（以前兩種編碼並存，兩頁各用一種）
+            unn = [c for c in payload["categories"] if c["unnecessary"]]
+            assert [c["name"] for c in unn] == ["手搖飲"], unn
+            assert unn[0]["total"] == 60.0
             assert any(s["name"] == "神秘小舖" for s in payload["uncategorized"])
 
             dash = export.write_export(conn, ws, cl)
@@ -1320,7 +1323,9 @@ def test_export_match_details():
                  "seller_name": "富利餐飲", "amount": 100.0}])
             cl = Classifier(ws.rules)
             payload = export.build_payload(conn, ws, cl)
-            assert payload["fda"]["match"] == {"店家": 1}
+            # 層級直方圖不進 payload——食安頁從 matches 導出（唯一編碼）
+            assert "match" not in payload["fda"], payload["fda"].keys()
+            assert len(payload["fda"]["matches"]) == 1
             m = payload["fda"]["matches"][0]
             assert m["level"] == "店家" and m["fda"].startswith("富利"), m
             assert m["date"] == "2026-05-01" and m["source"] == "edible_oil"
@@ -1356,6 +1361,9 @@ def test_fixed_spend_detection():
     found = _detect_fixed(rows)
     g = next(f for f in found if f["seller"] == "GOOGLE")
     assert g["active"] and 25 <= g["periodDays"] <= 35, g
+    # 週期標籤在這裡算完：門檻是 _detect_fixed 的實作細節，讓查詢頁重述
+    # 一次就會漂（原本 JS 那份的最後一支「約 N 天」永遠不可達）
+    assert g["periodLabel"] == "每月", g
     assert g["next"] and g["next"].startswith("2026-08"), "進行中要推下次預估"
     p = next(f for f in found if f["seller"] == "PLAY")
     assert not p["active"] and p["next"] is None, "超過 1.6 週期未出現＝疑似已停"
@@ -1697,10 +1705,13 @@ def a_payload(**overrides) -> dict:
         "invoiceCount": len(invoices),
         "invoices": invoices,
         "fixed": [
-            {"seller": "測試電信", "amount": 599.0, "periodDays": 31, "n": 3,
+            {"seller": "測試電信", "amount": 599.0, "periodDays": 31,
+             "periodLabel": "每月", "n": 3,
              "first": "2026-03-05", "last": "2026-05-05", "next": "2026-06-05",
              "active": True, "monthly": 588.18},
         ],
+        "fixedRule": {"minCount": 3, "tolAbs": 15, "tolPct": 5,
+                      "minDays": 25, "maxDays": 400, "staleFactor": 1.6},
         "months": months,
         "categories": [
             {"name": "電信", "total": 1797.0, "count": 3, "unnecessary": False},
@@ -1721,16 +1732,9 @@ def a_payload(**overrides) -> dict:
              "lat": None, "lon": None, "topItems": ["珍珠鮮奶茶"]},
             unclassified,
         ],
-        "unnecessary": [
-            {"date": "2026-06-05", "seller": "珍奶測試店",
-             "category": "手搖飲", "amount": 60.0},
-            {"date": "2026-04-18", "seller": "珍奶測試店",
-             "category": "手搖飲", "amount": 60.0},
-        ],
         "uncategorized": [unclassified],
         "fda": {
             "rows": 12,
-            "match": {"店家": 1, "品項": 1},
             "matches": [
                 {"level": "店家", "date": "2026-05-10", "num": "AA6",
                  "invoice": "測試超市", "fda": "測試超市股份有限公司",
@@ -1746,12 +1750,9 @@ def a_payload(**overrides) -> dict:
             ],
         },
         "lottery": {
-            "uncovered": 2,
             "periods": [
                 {"period": "11503", "label": "115年03-04月",
-                 "months": ["2026-03", "2026-04"],
-                 "claimStart": "2026-06-06", "claimEnd": "2026-09-05",
-                 "nInvoices": 4,
+                 "claimEnd": "2026-09-05", "nInvoices": 4,
                  "wins": [
                      {"num": "AA3", "date": "2026-04-05", "seller": "測試電信",
                       "prize": "六獎", "prizeAmount": 200, "also": None,
@@ -1996,8 +1997,7 @@ def test_pages_survive_hostile_and_edge_payloads():
                             "next": {"label": "x", "drawDate": None,
                                      "pending": 3}})),
         ("沒有比對報告",
-         a_payload(fda={"rows": 0, "match": None, "matches": None,
-                        "sources": []})),
+         a_payload(fda={"rows": 0, "matches": None, "sources": []})),
         ("舊版 data.js（發票沒有品項）",
          a_payload(invoices=[{k: v for k, v in inv.items() if k != "items"}
                              for inv in a_payload()["invoices"]])),
@@ -2046,7 +2046,7 @@ def test_payload_contract():
     from twcrawl.workspace import Workspace
 
     # 以領域值為鍵的對照表（命中層級、分類名），鍵隨資料變動不是形狀的一部分
-    value_keyed = {"fda.match", "months[].byCategory"}
+    value_keyed = {"months[].byCategory"}
 
     def shape(v, path=""):
         """{路徑} 集合：dict 收鍵、list 取首元素往下走。"""

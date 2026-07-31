@@ -187,10 +187,14 @@ TW.page({
   const avg = months.reduce((s, m) => s + m.total, 0) / months.length;
   const fixedAct = (D.fixed || []).filter(f => f.active);
   const fixedMonthly = fixedAct.reduce((s, f) => s + f.monthly, 0);
-  const unnTotal = D.unnecessary.reduce((s, u) => s + u.amount, 0);
-  const matchTotal = D.fda.match
-    ? Object.values(D.fda.match).reduce((a, b) => a + b, 0) : null;
-  const lot = D.lottery || { periods: [], uncovered: 0 };
+  // 非必要消費由旗標篩發票得出，payload 不另帶一份清單。
+  // 排序：日期新的在前，同日維持發票原順序（穩定排序，與舊版一致）
+  const unnCats = ui.unnecessaryCats(D.categories);
+  const unnecessary = D.invoices.filter(v => unnCats.has(v.category))
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  const unnTotal = unnecessary.reduce((s, u) => s + u.amount, 0);
+  const matchTotal = D.fda.matches ? D.fda.matches.length : null;
+  const lot = D.lottery || { periods: [] };
   const lotWins = lot.periods.flatMap(p => p.wins);
   const lotAmt = lotWins.reduce((s, w) => s + w.prizeAmount, 0);
   const lotN = lot.periods.reduce((s, p) => s + p.nInvoices, 0);
@@ -204,7 +208,7 @@ TW.page({
       extra: `<div class="delta">${fixedAct.length} 項進行中——` +
         '<a class="map" href="query.html?view=fixed">在查詢頁檢視</a></div>' },
     { label: "非必要消費累計", value: compact(unnTotal),
-      extra: `<div class="delta">${D.unnecessary.length} 筆——` +
+      extra: `<div class="delta">${unnecessary.length} 筆——` +
         '<a class="map" href="query.html?unnecessary=1">在查詢頁檢視</a></div>' },
     { label: "FDA 比對命中", value: matchTotal === null ? "—" : matchTotal + " 筆",
       extra: '<div class="delta">⚠ 命中≠買到問題商品——' +
@@ -590,13 +594,13 @@ TW.page({
 
   // ---- 非必要消費 -------------------------------------------------------
   const unn = el("div", "card");
-  unn.append(el("h2", null, `非必要消費（${D.unnecessary.length} 筆・${nt(unnTotal)}）`));
+  unn.append(el("h2", null, `非必要消費（${unnecessary.length} 筆・${nt(unnTotal)}）`));
   unn.append(el("div", "desc",
     "判準掛在店家分類（預設：手搖飲、甜點零食、咖啡）——超市裡買的零食抓不到；" +
     "要改判準就編輯 categories.local.json 的 unnecessary 欄位——" +
     '<a class="map" href="query.html?unnecessary=1">在查詢頁篩選檢視</a>'));
-  if (D.unnecessary.length) {
-    const recent = D.unnecessary.slice(0, 10);   // 全量會逐年變長，月報只留近期
+  if (unnecessary.length) {
+    const recent = unnecessary.slice(0, 10);   // 全量會逐年變長，月報只留近期
     const wrapT = el("div", "scrollx");
     wrapT.innerHTML = "<table><tr><th>日期</th><th>店家</th><th>分類</th>" +
       '<th class="num">金額</th><th></th></tr>' +
@@ -606,10 +610,10 @@ TW.page({
         `<td>${mapA(u.seller)}</td></tr>`).join("") +
       "</table>";
     unn.append(wrapT);
-    if (D.unnecessary.length > recent.length) {
+    if (unnecessary.length > recent.length) {
       unn.append(el("div", "note",
         `僅列近期 ${recent.length} 筆——` +
-        `<a class="map" href="query.html?unnecessary=1">全部 ${D.unnecessary.length} 筆在查詢頁</a>`));
+        `<a class="map" href="query.html?unnecessary=1">全部 ${unnecessary.length} 筆在查詢頁</a>`));
     }
   } else {
     unn.append(el("div", "note", "這段期間沒有非必要分類的消費。"));

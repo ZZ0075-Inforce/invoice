@@ -140,8 +140,8 @@ TW.page({
     curKey = activeKey;
     for (const b of chipsBox.children)
       b.classList.toggle("on", b.dataset.key === activeKey);
-    const f = (mFrom.value || minD.slice(0, 7)) + "-01";
-    const t = (mTo.value || maxD.slice(0, 7)) + "-31";
+    const { from: f, to: t } = ui.monthBounds(
+      mFrom.value || minD.slice(0, 7), mTo.value || maxD.slice(0, 7));
 
     const agg = {};   // display name → {total, count}
     let inRange = 0, sum = 0;

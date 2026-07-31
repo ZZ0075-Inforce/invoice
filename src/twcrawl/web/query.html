@@ -148,8 +148,7 @@ TW.page({
       + (w.also ? `；另符合${w.also}，擇高` : "")
     )}">🎉</span>` : "";
   }
-  const unnecessarySet = new Set(
-    (D.categories || []).filter(c => c.unnecessary).map(c => c.name));
+  const unnecessarySet = ui.unnecessaryCats(D.categories);
   const dates = D.invoices.map(v => v.date).sort();
   const minM = dates[0].slice(0, 7), maxM = dates[dates.length - 1].slice(0, 7);
 
@@ -246,8 +245,7 @@ TW.page({
     const sort = { key: "date", dir: -1 };   // 預設最新在前
     function filtered() {
       const q = F.q.value.trim().toLowerCase();
-      const from = F.from.value ? F.from.value + "-01" : "";
-      const to = F.to.value ? F.to.value + "-31" : "";
+      const { from, to } = ui.monthBounds(F.from.value, F.to.value);
       const amin = F.amin.value === "" ? null : Number(F.amin.value);
       const amax = F.amax.value === "" ? null : Number(F.amax.value);
       return D.invoices.filter(v => {
@@ -461,11 +459,7 @@ TW.page({
         tiles.append(t);
       }
       out.append(tiles);
-      const months = (D.months || []).map(mm => ({
-        month: mm.month,
-        v: invs.filter(x => x.date.slice(0, 7) === mm.month)
-               .reduce((s, x) => s + x.amount, 0),
-      }));
+      const months = ui.monthTotals(invs, D.months);
       out.append(monthBars(months));
       const lt = el("div", "scrollx");
       lt.innerHTML = `<h2 style="margin-top:14px">「${esc(cat)}」的店家</h2>` +
@@ -545,11 +539,7 @@ TW.page({
       out.append(tiles);
 
       // 月趨勢（沿用全期月份軸，沒消費的月份是 0）
-      const months = (D.months || []).map(mm => ({
-        month: mm.month,
-        v: invs.filter(x => x.date.slice(0, 7) === mm.month)
-               .reduce((s, x) => s + x.amount, 0),
-      }));
+      const months = ui.monthTotals(invs, D.months);
       out.append(monthBars(months));
 
       if (hasItems) {
@@ -643,16 +633,16 @@ TW.page({
   }
 
   // ---- 固定支出視圖 -----------------------------------------------------
-  // 偵測在 export.py 的 _detect_fixed（月報磚與本視圖共用），這裡只呈現。
-  const periodLabel = d =>
-    d <= 38 ? "每月" : d <= 70 ? "每兩月" : d <= 100 ? "每季"
-      : d <= 200 ? "每半年" : d <= 400 ? "每年" : `約 ${Math.round(d)} 天`;
-
+  // 偵測與期別標籤都在 export.py 的 _detect_fixed（月報磚與本視圖共用），
+  // 這裡只呈現；門檻數字也由 payload 帶過來，改了門檻文案自動跟著改
   function fixedView() {
+    const R = D.fixedRule || {};
     const card = el("div", "card");
     card.append(el("h2", null, "固定支出"));
     card.append(el("div", "desc",
-      "同一店家、金額相近、月級以上週期（含雙月、年繳）且至少出現 3 次。" +
+      `同一店家、金額相近（±${R.tolAbs} 元或 ${R.tolPct}%）、` +
+      `週期 ${R.minDays}–${R.maxDays} 天（月級以上，含雙月、年繳）、` +
+      `且至少出現 ${R.minCount} 次。` +
       "偵測是提示，不代表存在契約；高頻日常（如手搖飲）依定義不列入。"));
     const found = Array.isArray(D.fixed) ? D.fixed : [];
     if (!found.length) {
@@ -667,7 +657,7 @@ TW.page({
        "進行中項目的月化合計"],
       ["進行中", act.length + " 項", ""],
       ["疑似已停", (found.length - act.length) + " 項",
-       "超過 1.6 個週期沒再出現"],
+       `超過 ${R.staleFactor} 個週期沒再出現`],
     ]) {
       const t = el("div", "tile");
       t.append(el("div", "label", label), el("div", "value", value));
@@ -682,7 +672,7 @@ TW.page({
       found.map(x =>
         `<tr><td><button class="linkish" data-s="${esc(x.seller)}">${esc(x.seller)}</button></td>` +
         `<td class="num">${Math.round(x.amount).toLocaleString("zh-TW")}</td>` +
-        `<td>${periodLabel(x.periodDays)}</td><td class="num">${x.n}</td>` +
+        `<td>${esc(x.periodLabel)}</td><td class="num">${x.n}</td>` +
         `<td>${x.first}</td><td>${x.last}</td>` +
         `<td>${x.next || "—"}</td>` +
         `<td class="${x.active ? "ok" : "off"}">${x.active ? "進行中" : "疑似已停"}</td>` +

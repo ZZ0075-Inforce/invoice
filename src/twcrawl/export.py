@@ -75,10 +75,33 @@ def _items_by_invoice(conn) -> dict[str, list[dict]]:
     return out
 
 
+# 固定支出的判準。查詢頁把這些數字寫進說明文案，所以由 payload 帶過去——
+# 以前門檻在這裡、文案在 query.html，改了門檻文案不會跟著改。
+FIXED_RULE = {
+    "minCount": 3,        # 至少出現幾次才算規律
+    "tolAbs": 15,         # 金額相近：±max(tolAbs 元, tolPct%)
+    "tolPct": 5,
+    "minDays": 25,        # 週期下限——高頻日常（手搖飲）歸非必要消費管
+    "maxDays": 400,       # 週期上限
+    "staleFactor": 1.6,   # 超過幾個週期沒再出現就算疑似已停
+}
+
+_PERIOD_BANDS = ((38, "每月"), (70, "每兩月"), (100, "每季"),
+                 (200, "每半年"), (FIXED_RULE["maxDays"], "每年"))
+
+
+def _period_label(days: float) -> str:
+    for limit, label in _PERIOD_BANDS:
+        if days <= limit:
+            return label
+    return f"約 {round(days)} 天"   # med 已被 maxDays 濾過，實務上到不了
+
+
 def _detect_fixed(inv_rows: list[dict]) -> list[dict]:
     """固定支出偵測（CONTEXT.md：同店家、金額相近、月級以上週期、至少 3 次）。
 
     月報磚與查詢頁固定支出視圖共用這份結果；偵測是提示，不代表存在契約。
+    週期標籤在這裡算完——門檻是這裡的實作細節，讓頁面重述一次就會漂。
     """
     if not inv_rows:
         return []
@@ -88,33 +111,35 @@ def _detect_fixed(inv_rows: list[dict]) -> list[dict]:
     data_max = _dt.date.fromisoformat(max(v["date"] for v in inv_rows))
     found: list[dict] = []
     for seller, rows in by_seller.items():
-        clusters: list[dict] = []   # 金額相近（±max(15, 5%)）的貪婪分群
+        clusters: list[dict] = []   # 金額相近的貪婪分群
         for v in sorted(rows, key=lambda r: r["amount"]):
             c = clusters[-1] if clusters else None
-            if c and v["amount"] - c["mean"] <= max(15, c["mean"] * 0.05):
+            tol_amt = max(FIXED_RULE["tolAbs"],
+                          c["mean"] * FIXED_RULE["tolPct"] / 100) if c else 0
+            if c and v["amount"] - c["mean"] <= tol_amt:
                 c["rows"].append(v)
                 c["mean"] = sum(r["amount"] for r in c["rows"]) / len(c["rows"])
             else:
                 clusters.append({"rows": [v], "mean": v["amount"]})
         for c in clusters:
-            if len(c["rows"]) < 3:
+            if len(c["rows"]) < FIXED_RULE["minCount"]:
                 continue
             ds = sorted(_dt.date.fromisoformat(r["date"]) for r in c["rows"])
             iv = [(b - a).days for a, b in zip(ds, ds[1:])]
             s = sorted(iv)
             n = len(s)
             med = s[(n - 1) // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
-            if med < 25 or med > 400:   # 月級以上才算；高頻日常歸非必要消費管
+            if not FIXED_RULE["minDays"] <= med <= FIXED_RULE["maxDays"]:
                 continue
             tol = max(5, med * 0.25)
             outliers = sum(1 for i in iv if abs(i - med) > tol)
             if outliers > (1 if len(iv) >= 4 else 0):
                 continue
             last = ds[-1]
-            active = (data_max - last).days <= med * 1.6
+            active = (data_max - last).days <= med * FIXED_RULE["staleFactor"]
             found.append({
                 "seller": seller, "amount": c["mean"], "periodDays": med,
-                "n": len(c["rows"]),
+                "periodLabel": _period_label(med), "n": len(c["rows"]),
                 "first": ds[0].isoformat(), "last": last.isoformat(),
                 "next": (last + _dt.timedelta(days=med)).isoformat()
                         if active else None,
@@ -140,7 +165,6 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
     months: dict[str, dict] = {}
     cats: dict[str, dict] = {}
     sellers: dict[str, dict] = {}
-    unnecessary: list[dict] = []
     invoice_rows: list[dict] = []
 
     for num, inv_date, seller, amount in invs:
@@ -172,9 +196,9 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
         })
         s["total"] += amount
         s["count"] += 1
-        if cat.unnecessary:
-            unnecessary.append({"date": str(inv_date)[:10], "seller": si["display"],
-                                "category": cat.name, "amount": amount})
+        # 非必要消費不另存一份清單：判準是 categories[].unnecessary 這個旗標，
+        # 頁面用它篩 invoices 就好——以前兩種編碼並存，查詢頁用旗標、月報用
+        # 清單，同一件事兩個答案
         invoice_rows.append({"num": num, "date": str(inv_date)[:10],
                              "seller": si["display"], "category": cat.name,
                              "amount": amount, "items": inv_items})
@@ -209,15 +233,15 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
         s["rows"] += cnt
         s["lastSeen"] = max(s["lastSeen"] or "", str(last or "")[:10]) or None
 
+    # 命中的層級直方圖不另外出一份：它從 matches 導得出來，而且兩種編碼會打架
+    # ——沒有報告是 None、有報告零命中是 {}，後者在 JS 裡是 truthy，磚會從
+    # 「—」翻成「0 筆」
     report = ws.match_report
-    match_counts: dict[str, int] | None = None
     match_rows: list[dict] | None = None
     if report.exists():
-        match_counts = defaultdict(int)
         match_rows = []
         with report.open(encoding="utf-8-sig") as f:
             for row in csv.DictReader(f):
-                match_counts[row.get("level", "?")] += 1
                 s = src_bucket(row.get("source") or "")
                 s["hits"] += 1
                 match_rows.append({
@@ -226,19 +250,16 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
                     "invoice": row.get("invoice_side"),
                     "fda": row.get("fda_side"), "source": s["key"],
                 })
-        match_counts = dict(match_counts)
 
     # 對獎：號碼已在 lottery_draws（lottery 指令維護），這裡即算即得。
     # data.js 只放中獎結果與期別摘要，不放中獎號碼本身（UI 用不到）。
     from . import lottery as lottery_mod
     lot_raw = lottery_mod.check_invoices(conn, ws.cache)
     lottery = {
-        "uncovered": lot_raw["uncovered"],
         "periods": [
             {"period": p["period"],
              "label": lottery_mod.period_label(p["period"]),
-             "months": p["months"],
-             "claimStart": p["claim_start"], "claimEnd": p["claim_end"],
+             "claimEnd": p["claim_end"],
              "nInvoices": p["n_invoices"],
              "wins": [
                  {"num": w["inv_num"], "date": w["date"],
@@ -271,12 +292,12 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
         "invoiceCount": len(invs),
         "invoices": invoice_rows,
         "fixed": _detect_fixed(invoice_rows),
+        "fixedRule": FIXED_RULE,
         "months": [months[k] for k in sorted(months)],
         "categories": sorted(cats.values(), key=lambda c: -c["total"]),
         "sellers": sorted(sellers.values(), key=lambda s: -s["total"]),
-        "unnecessary": sorted(unnecessary, key=lambda u: u["date"], reverse=True),
         "uncategorized": uncategorized,
-        "fda": {"rows": fda_rows, "match": match_counts, "matches": match_rows,
+        "fda": {"rows": fda_rows, "matches": match_rows,
                 "sources": sorted(sources.values(),
                                   key=lambda s: (s["kind"] != "事件", s["label"]))},
         "lottery": lottery,
