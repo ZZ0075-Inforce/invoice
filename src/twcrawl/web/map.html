@@ -104,6 +104,7 @@ TW.page({
   const minD = dates[0] || "";
   const mFrom = document.getElementById("mFrom");
   const mTo = document.getElementById("mTo");
+  const sfind = document.getElementById("sfind");   // render() 要讀搜尋字
   mFrom.min = mTo.min = minD.slice(0, 7);
   mFrom.max = mTo.max = maxD.slice(0, 7);
 
@@ -142,6 +143,9 @@ TW.page({
       b.classList.toggle("on", b.dataset.key === activeKey);
     const { from: f, to: t } = ui.monthBounds(
       mFrom.value || minD.slice(0, 7), mTo.value || maxD.slice(0, 7));
+    // 店家搜尋（issue #15）：比對頁面顯示的店家名（含招牌名），與圖例、
+    // 時間區間取交集；清空即恢復
+    const q = sfind.value.trim().toLowerCase();
 
     const agg = {};   // display name → {total, count}
     let inRange = 0, sum = 0;
@@ -162,6 +166,7 @@ TW.page({
       const m = meta[name];
       const bucket = m && topCats.includes(m.category) ? m.category : "其他/未分類";
       if (hidden.has(bucket)) continue;   // 圖例點掉的分類：不畫也不列無座標清單
+      if (q && !name.toLowerCase().includes(q)) continue;  // 搜尋不符：同上
       if (!m || m.lat == null || m.lon == null) { noGeo.push({ name, ...a }); continue; }
       const r = 6 + 14 * Math.sqrt(a.total / max);
       const mk = L.circleMarker([m.lat, m.lon], {
@@ -217,8 +222,8 @@ TW.page({
     lg.append(b);
   }
 
-  // 店家搜尋定位：只列有座標的店家；選了就飛過去、圓點在畫面上就開 popup
-  const sfind = document.getElementById("sfind");
+  // 店家搜尋：輸入即過濾圓點（render 內取交集），datalist 選定同名店家
+  // 時另外定位——飛過去、圓點在畫面上就開 popup
   const sdl = document.getElementById("sellergeo");
   for (const s of D.sellers) {
     if (s.lat != null && s.lon != null) {
@@ -227,6 +232,7 @@ TW.page({
       sdl.append(o);
     }
   }
+  sfind.addEventListener("input", () => render(curKey));
   sfind.addEventListener("change", () => {
     const m = meta[sfind.value];
     if (!m || m.lat == null) return;

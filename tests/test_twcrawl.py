@@ -2123,9 +2123,10 @@ def a_payload(**overrides) -> dict:
              "legal": "測試超市股份有限公司", "industry": "超級市場",
              "address": "臺北市測試區測試路 1 號", "lat": 25.03, "lon": 121.56,
              "topItems": ["雞蛋", "米", "牛奶"]},
+            # 有座標：地圖搜尋測試要兩個圓點才驗得出「過濾剩一點」
             {"name": "珍奶測試店", "category": "手搖飲", "total": 120.0, "count": 2,
              "legal": None, "industry": None, "address": None,
-             "lat": None, "lon": None, "topItems": ["珍珠鮮奶茶"]},
+             "lat": 25.04, "lon": 121.55, "topItems": ["珍珠鮮奶茶"]},
             unclassified,
         ],
         "uncategorized": [unclassified],
@@ -2659,6 +2660,50 @@ def test_query_status_display():
                 f"展開明細要有中文狀態行，實得 {r['detail']!r}")
             page.close()
     print("✓ 查詢頁狀態顯示：開立不標、未收錄碼原樣標、展開有中文狀態行")
+
+
+def test_map_seller_search():
+    """地圖店家搜尋（issue #15）：輸入即過濾圓點、與圖例/時間取交集、
+    清空恢復。fixture 兩個有座標的店家（超市、珍奶）。"""
+    from twcrawl.workspace import Workspace
+
+    js = """(step) => {
+      const sfind = document.getElementById("sfind");
+      const count = () =>
+        document.querySelectorAll("#map path.leaflet-interactive").length;
+      const type = v => { sfind.value = v;
+        sfind.dispatchEvent(new Event("input", { bubbles: true })); };
+      const legBtn = () => [...document.querySelectorAll("#legend button.leg")]
+        .find(x => x.textContent.includes("手搖"));
+      if (step === "baseline") return count();
+      if (step === "search") { type("超市"); return count(); }
+      if (step === "clear") { type(""); return count(); }
+      if (step === "legend") { type("珍奶"); legBtn().click(); return count(); }
+      if (step === "time") {
+        legBtn().click();                       // 恢復圖例，只留時間交集
+        document.getElementById("mFrom").value = "2026-03";
+        const mTo = document.getElementById("mTo");
+        mTo.value = "2026-03";
+        mTo.dispatchEvent(new Event("change", { bubbles: true }));
+        return count();
+      }
+    }"""
+    with TemporaryDirectory() as td:
+        out = _stage_pages(Workspace(Path(td)), a_payload())
+        with browser_context(session_file=None, headed=False) as ctx:
+            _stub_tiles(ctx)
+            page, errs = _open(ctx, out, "map.html")
+            assert not errs, f"map：{errs}"
+            for step, want, why in (
+                    ("baseline", 2, "預設近三月應有 2 個圓點"),
+                    ("search", 1, "搜「超市」應剩 1 點"),
+                    ("clear", 2, "清空搜尋應回復 2 點"),
+                    ("legend", 0, "搜「珍奶」∩圖例隱藏手搖飲應為 0"),
+                    ("time", 0, "搜「珍奶」∩區間 2026-03 應為 0（該月無其發票）")):
+                got = page.evaluate(js, step)
+                assert got == want, f"{why}，實得 {got}"
+            page.close()
+    print("✓ 地圖店家搜尋：輸入過濾、與圖例/時間交集、清空恢復")
 
 
 def test_payload_contract():
