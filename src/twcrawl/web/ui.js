@@ -122,6 +122,33 @@
     }
   }
 
+  /** 五頁通往控制台的入口（issue #20）。
+   *
+   *  只在 serve 模式下畫：file:// 之下控制台沒有後端可打，給一條按了沒反應
+   *  的連結比沒有更糟。這也順帶讓五頁的 golden 快照不受影響——那些測試走
+   *  file://，所以看不到這個節點。
+   *
+   *  掛在各頁的 `.sub` 那一行；四頁的 .sub 是 render 時才建的，而 render 走
+   *  body 底部的 inline script（在 DOMContentLoaded 之前跑完），所以這裡等到
+   *  DOMContentLoaded 才找得穩。地圖沒有 .sub，退到 header。
+   */
+  function controlLink() {
+    if (location.protocol !== "http:" && location.protocol !== "https:") return;
+    if (/control\.html$/.test(location.pathname)) return;   // 自己不連自己
+    const host = document.querySelector(".sub")
+      || document.querySelector("header");
+    if (!host || host.querySelector("a.ctl")) return;
+    const a = el("a", "ctl map", "🎛 控制台");
+    a.href = "control.html";
+    host.append(" ", a);
+  }
+
+  if (document.readyState === "loading") {
+    addEventListener("DOMContentLoaded", controlLink);
+  } else {
+    controlLink();
+  }
+
   const TW = { THEMES, esc, nt, css, el, themeButton, catColors,
                unnecessaryCats, monthTotals, monthBounds, page };
   window.TW = TW;

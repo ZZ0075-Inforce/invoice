@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>twcrawl 控制台</title>
+<script src="ui.js"></script>
+<link rel="stylesheet" href="ui.css">
+<style>
+  /* 文件版面抄的是 dashboard 那份變體（header 間距、a.map 12px）；
+     body/button.theme/h1 本來就刻意留各頁（ui.css 註解）。
+     .st 狀態燈與 #out 輸出框是本頁專屬。 */
+  body {
+    background: var(--page); color: var(--text-1);
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif;
+    font-size: 14px; line-height: 1.5; padding: 24px 16px 48px;
+  }
+  header { margin-bottom: 20px; position: relative; }
+  button.theme { position: absolute; top: 0; right: 0;
+                 border: 1px solid var(--border); background: var(--surface-1);
+                 color: var(--text-2); border-radius: 999px; padding: 3px 12px;
+                 cursor: pointer; font: inherit; font-size: 12px; }
+  h1 { font-size: 20px; font-weight: 650; }
+  a.map { color: var(--s1); text-decoration: none; font-size: 12px; }
+  a.map:hover { text-decoration: underline; }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+         margin-bottom: 12px; }
+  button.run { border: 1px solid var(--border); background: var(--surface-1);
+               color: var(--text-1); border-radius: 8px; padding: 7px 16px;
+               cursor: pointer; font: inherit; font-weight: 600; }
+  button.run:disabled { color: var(--muted); cursor: default; }
+  .st { font-size: 13px; font-weight: 600; }
+  .st.idle { color: var(--muted); }
+  .st.running { color: var(--s1); }
+  .st.done { color: var(--up-good); }
+  .st.failed { color: var(--s2); }
+  #out {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 12px; margin: 0;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 12px; line-height: 1.55; color: var(--text-2);
+    white-space: pre-wrap; word-break: break-word;
+    max-height: 420px; overflow: auto; min-height: 90px;
+  }
+</style>
+</head>
+<body>
+<!-- header 放在 .wrap 之內：其他頁的 header 是 render 進 #app（本身就是
+     .wrap）裡面的，擺在外面會變成標題貼左緣、內容置中 -->
+<div class="wrap">
+<header>
+  <h1>twcrawl 控制台</h1>
+  <div class="sub">
+    <a class="map" href="dashboard.html">📊 月報</a> ·
+    <a class="map" href="query.html">🔎 查詢</a> ·
+    <a class="map" href="fda.html">🥫 食安</a> ·
+    <a class="map" href="year.html">📅 年度回顧</a> ·
+    <a class="map" href="map.html">🗺 地圖</a>
+  </div>
+</header>
+
+  <!-- file:// 開檔時控制台沒有後端可打。給說明，不給按了沒反應的按鈕
+       （ADR-0002 的雙模式慣例：唯讀模式要說清楚自己是唯讀）。 -->
+  <div id="need-serve" class="empty" hidden>
+    控制台需要 <b>serve 模式</b>。<br><br>
+    請在工作區執行 <code>twcrawl serve</code>，再從它開啟的頁面進來——
+    直接雙擊開檔（<code>file://</code>）沒有可以呼叫的後端。
+  </div>
+
+  <div id="panel" hidden>
+    <div class="row">
+      <button class="run" id="run-export">重生報表</button>
+      <span class="st idle" id="state">閒置</span>
+    </div>
+    <pre id="out"></pre>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  const OUT = document.getElementById("out");
+  const ST = document.getElementById("state");
+  const BTN = document.getElementById("run-export");
+
+  document.querySelector("header").append(TW.themeButton());
+
+  // http(s) 才有後端。file:// 之下只留說明。
+  if (location.protocol !== "http:" && location.protocol !== "https:") {
+    document.getElementById("need-serve").hidden = false;
+    return;
+  }
+  document.getElementById("panel").hidden = false;
+
+  let cursor = 0;      // 已經收過幾行（server 端算的總行數，不會倒退）
+  let dropped = 0;     // 已知被丟棄的行數，只在增加時提示一次
+  let timer = null;
+
+  /** 工作輸出一律走 textContent。
+   *  這些行含使用者自己的資料（店家名、路徑），用 innerHTML 等於讓子行程
+   *  的輸出決定頁面結構——逸出漏一處就是注入。 */
+  function write(text) {
+    OUT.append(document.createTextNode(text + "\n"));
+    OUT.scrollTop = OUT.scrollHeight;
+  }
+
+  function setState(job) {
+    if (!job) {
+      ST.className = "st idle"; ST.textContent = "閒置";
+      BTN.disabled = false; return;
+    }
+    const running = job.state === "running";
+    BTN.disabled = running;
+    ST.className = "st " + (job.state === "done" ? "done"
+      : job.state === "failed" ? "failed" : "running");
+    ST.textContent = running ? "執行中：" + job.name
+      : job.state === "done" ? "完成：" + job.name
+      : "失敗：" + job.name + "（結束碼 " + job.returncode + "）";
+  }
+
+  function absorb(job) {
+    if (job.dropped > dropped) {
+      write("（前面 " + (job.dropped - dropped) + " 行過長已捲掉）");
+      dropped = job.dropped;
+    }
+    for (const line of job.lines || []) write(line);
+    if (typeof job.next === "number") cursor = job.next;
+  }
+
+  function fail(msg) {
+    ST.className = "st failed"; ST.textContent = "失敗";
+    BTN.disabled = false;
+    write("控制台錯誤：" + msg);
+  }
+
+  function schedule() {
+    clearTimeout(timer);
+    timer = setTimeout(poll, 400);
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch("/api/jobs/current?since=" + cursor);
+      const j = await r.json();
+      if (!j.ok) return fail(j.error || ("HTTP " + r.status));
+      if (!j.job) return setState(null);
+      absorb(j.job);
+      setState(j.job);
+      if (j.job.state === "running") schedule();
+    } catch (e) {
+      fail(e && e.message ? e.message : String(e));
+    }
+  }
+
+  async function run() {
+    OUT.textContent = ""; cursor = 0; dropped = 0;
+    BTN.disabled = true;
+    ST.className = "st running"; ST.textContent = "啟動中…";
+    try {
+      const r = await fetch("/api/jobs", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({cmd: "export"}),
+      });
+      const j = await r.json();
+      if (!j.ok) return fail(j.error || ("HTTP " + r.status));
+      absorb(j.job);
+      setState(j.job);
+      schedule();
+    } catch (e) {
+      fail(e && e.message ? e.message : String(e));
+    }
+  }
+
+  BTN.addEventListener("click", run);
+  poll();   // 進來先問一次：工作可能是別的分頁按的，這頁也該看得到
+})();
+</script>
+</body>
+</html>

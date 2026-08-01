@@ -1606,6 +1606,177 @@ def test_serve_rules_writeback():
     print("✓ serve：/api/rules 寫回規則＋招牌名（保留其他欄位）並重生 data.js")
 
 
+def _post_json(port: int, path: str, payload: dict, origin: str | None = None):
+    import urllib.error
+    import urllib.request
+
+    headers = {"Content-Type": "application/json"}
+    if origin:
+        headers["Origin"] = origin
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.status, json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read().decode("utf-8"))
+
+
+def test_serve_jobs_runs_export_in_subprocess():
+    """控制台的工作端點：真的起子行程跑 export，輸出收得到、同時只准一個。
+
+    刻意用真的子行程而不是 stub——「子行程跑的是最新程式碼、不會用到 serve
+    進程裡的舊模組」正是選這個做法的理由（jobs.py 開頭），stub 掉就什麼都
+    沒驗到。順帶把白名單與跨來源防護一起釘住：這兩個端點會改檔案、會起
+    行程，不該讓別的網頁按得動。
+    """
+    import threading
+    import time
+    import urllib.request
+
+    from twcrawl import serve as serve_mod
+    from twcrawl.workspace import Workspace
+
+    with TemporaryDirectory() as td:
+        ws = Workspace(Path(td))
+        conn = db.connect(ws.db)
+        try:
+            db.upsert_invoices(conn, [
+                an_invoice("JJ1", "2026-05-01", "工作測試店"),
+            ])
+        finally:
+            conn.close()
+
+        httpd = serve_mod.make_server(ws, port=0)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            port = httpd.server_address[1]
+
+            code, j = _post_json(port, "/api/jobs", {"cmd": "export"})
+            assert code == 202 and j["ok"], f"啟動工作失敗：{code} {j}"
+
+            # 子行程光是啟動直譯器就要好幾百毫秒，所以這一發必定落在工作進行中
+            code2, j2 = _post_json(port, "/api/jobs", {"cmd": "export"})
+            assert code2 == 409, f"同時只該准一個工作，卻收到 {code2}：{j2}"
+
+            deadline = time.time() + 180
+            cursor, lines, state = 0, [], "running"
+            while time.time() < deadline:
+                with urllib.request.urlopen(
+                        f"http://127.0.0.1:{port}"
+                        f"/api/jobs/current?since={cursor}") as r:
+                    snap = json.loads(r.read().decode("utf-8"))["job"]
+                lines += snap["lines"]
+                cursor, state = snap["next"], snap["state"]
+                if state != "running":
+                    break
+                time.sleep(0.2)
+
+            assert state == "done", f"工作沒有成功收尾：{state}／{lines}"
+            data_js = ws.out / "data.js"
+            assert data_js.exists(), "export 應該真的產出 data.js"
+            assert "工作測試店" in data_js.read_text(encoding="utf-8")
+            assert any("儀表板" in ln for ln in lines), \
+                f"應該收得到子行程的輸出，實際只有：{lines}"
+
+            # 端點收的是工作名稱不是 argv：白名單外的名字進不去
+            code3, j3 = _post_json(port, "/api/jobs", {"cmd": "backup"})
+            assert code3 == 400 and not j3["ok"], f"白名單沒擋住：{code3} {j3}"
+
+            # 使用者開著 serve 時，別的網頁不該按得動這些端點
+            code4, _ = _post_json(port, "/api/jobs", {"cmd": "export"},
+                                  origin="http://evil.example")
+            assert code4 == 403, f"跨來源請求該被擋，卻收到 {code4}"
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+    print("✓ serve：/api/jobs 起子行程跑 export（輸出可取、同時只准一個、"
+          "白名單與跨來源防護）")
+
+
+def test_control_page_modes_and_output_escaping():
+    """控制台頁：file:// 只給說明；serve 之下顯示工作三態；輸出不進 DOM 結構。
+
+    工作回應是 stub 的——這裡測的是頁面怎麼呈現狀態與輸出，工作本身由
+    test_serve_jobs_runs_export_in_subprocess 驗。兩者刻意分開：一個炸了
+    才看得出是後端還是頁面。
+    """
+    import threading
+
+    from twcrawl import serve as serve_mod
+    from twcrawl.workspace import Workspace
+
+    hostile = '<b>惡意</b><img src=x onerror="alert(1)">'
+    stub = """
+      ([hostile, endState, rc]) => {
+        window.fetch = async (url, opts) => {
+          const post = opts && opts.method === "POST";
+          const job = post
+            ? {id: 1, name: "export", state: "running", returncode: null,
+               lines: [hostile], next: 1, dropped: 0}
+            : {id: 1, name: "export", state: endState, returncode: rc,
+               lines: ["收尾一行"], next: 2, dropped: 0};
+          return {status: 200, json: async () => ({ok: true, job})};
+        };
+      }
+    """
+
+    with TemporaryDirectory() as td:
+        ws = Workspace(Path(td))
+        out = _stage_pages(ws, a_payload())
+        with browser_context(session_file=None, headed=False) as ctx:
+            # file://：給說明，不給按了沒反應的按鈕
+            page, errs = _open(ctx, out, "control.html")
+            assert not errs, f"control.html（file://）有 JS 錯誤：{errs}"
+            assert page.is_visible("#need-serve"), \
+                "file:// 之下應顯示「需要 serve 模式」"
+            assert not page.is_visible("#panel"), \
+                "file:// 之下不該給按了沒反應的按鈕"
+            page.close()
+
+            httpd = serve_mod.make_server(ws, port=0)
+            threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            try:
+                port = httpd.server_address[1]
+                page = ctx.new_page()
+                errs = []
+                page.on("pageerror", lambda e: errs.append(f"pageerror: {e}"))
+                page.goto(f"http://127.0.0.1:{port}/control.html")
+                page.wait_for_timeout(300)
+                assert page.is_visible("#panel"), "serve 之下應該有控制面板"
+                assert not page.is_visible("#need-serve")
+
+                # 成功：running（夾帶惡意字串）→ done
+                page.evaluate(stub, [hostile, "done", 0])
+                page.click("#run-export")
+                page.wait_for_timeout(120)
+                assert "執行中" in page.inner_text("#state"), \
+                    f"工作進行中該顯示執行中，實際是 {page.inner_text('#state')!r}"
+                assert page.is_disabled("#run-export"), "進行中不該還能再按"
+                page.wait_for_selector("#state:has-text('完成')", timeout=5000)
+                assert page.eval_on_selector(
+                    "#out", "e => e.querySelector('b, img') === null"), \
+                    "工作輸出不得被當成 HTML 解讀"
+                assert hostile in page.inner_text("#out"), \
+                    "惡意字串應原樣顯示為文字"
+
+                # 失敗：結束碼要露出來，按鈕要能再按
+                page.evaluate(stub, [hostile, "failed", 3])
+                page.click("#run-export")
+                page.wait_for_selector("#state:has-text('失敗')", timeout=5000)
+                assert "3" in page.inner_text("#state"), "失敗要顯示結束碼"
+                assert not page.is_disabled("#run-export"), \
+                    "工作結束後按鈕要能再按"
+                assert not errs, f"control.html 有 JS 錯誤：{errs}"
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+    print("✓ 控制台頁：file:// 給說明、serve 之下三態顯示、"
+          "工作輸出不進 DOM 結構")
+
+
 def test_local_rules_validation():
     from twcrawl.categories import Classifier, load_local_config
 
