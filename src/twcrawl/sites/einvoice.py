@@ -234,6 +234,10 @@ class CsvParse(NamedTuple):
     data_rows: int     # 資料列數：扣掉空行，也扣掉表頭那一列
     columns: int       # 第一列的欄數（0＝檔案裡一列都沒有）
     skipped: int       # 認不出發票號碼而略過的列
+    # 認得發票號碼、卻沒解出品項的列。**品項欄名對不上時就是這個數字在說話**
+    # ——沒有它，`if mi.get("description")` 會把整份明細靜默丟掉，而摘要照樣
+    # 印「匯入完成…明細 0 列」以 0 收場（寬表本來就是一列一品項）
+    no_item_rows: int
 
 
 def parse_csv_file(path: Path) -> tuple[list[dict], list[dict]]:
@@ -253,7 +257,7 @@ def parse_csv_report(path: Path) -> CsvParse:
     text = _read_text(path)
     rows = [r for r in csv.reader(io.StringIO(text)) if r and any(c.strip() for c in r)]
     if not rows:
-        return CsvParse([], [], "unknown", 0, 0, 0)
+        return CsvParse([], [], "unknown", 0, 0, 0, 0)
 
     header = [c.strip() for c in rows[0]]
     mapped = [_LOOKUP.get(_norm_key(h)) for h in header]
@@ -261,20 +265,24 @@ def parse_csv_report(path: Path) -> CsvParse:
         INV_NUM_RE.match(c.upper()) for c in header
     )
     if is_header:
-        inv, items, skipped = _parse_csv_with_header(path, header, rows[1:])
-        return CsvParse(inv, items, "header", len(rows) - 1, len(header), skipped)
+        inv, items, skipped, no_item = _parse_csv_with_header(
+            path, header, rows[1:])
+        return CsvParse(inv, items, "header", len(rows) - 1, len(header),
+                        skipped, no_item)
     inv, items, skipped = _parse_csv_md(path, rows)
     kind = "md" if inv or items else "unknown"
-    return CsvParse(inv, items, kind, len(rows), len(header), skipped)
+    # M/D 是一列一角色（M＝表頭、D＝明細），「有發票沒品項」在那裡是正常的
+    return CsvParse(inv, items, kind, len(rows), len(header), skipped, 0)
 
 
 def _parse_csv_with_header(
     path: Path, header: list[str], body: list[list[str]]
-) -> tuple[list[dict], list[dict], int]:
+) -> tuple[list[dict], list[dict], int, int]:
     invoices: list[dict] = []
     items: list[dict] = []
     seq: dict[str, int] = {}
     skipped = 0
+    no_item = 0
 
     for row in body:
         rec = {header[i]: c.strip() for i, c in enumerate(row) if i < len(header)}
@@ -301,7 +309,9 @@ def _parse_csv_with_header(
             }
         )
         mi = _map_record(rec, _ITEM_LOOKUP)
-        if mi.get("description"):
+        if not mi.get("description"):
+            no_item += 1
+        else:
             seq[inv_num] = seq.get(inv_num, 0) + 1
             items.append(
                 {
@@ -314,7 +324,7 @@ def _parse_csv_with_header(
                     "raw": raw,
                 }
             )
-    return invoices, items, skipped
+    return invoices, items, skipped, no_item
 
 
 def _parse_csv_md(
@@ -528,7 +538,8 @@ def import_csv(path: Path, conn) -> dict:
     n_inv = db.upsert_invoices(conn, invoices)
     n_item = db.upsert_items(conn, rep.items)
     return {"file": str(path), "kind": rep.kind, "rows": rep.data_rows,
-            "skipped": rep.skipped, "invoices": n_inv, "items": n_item}
+            "skipped": rep.skipped, "no_item_rows": rep.no_item_rows,
+            "invoices": n_inv, "items": n_item}
 
 
 def ingest(capture_dir: Path, conn) -> dict[str, int]:

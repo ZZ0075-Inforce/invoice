@@ -130,10 +130,12 @@
 
     <!-- 重生過報表的工作跑完才出現：筆數在輸出裡，這裡給的是「現在去看」 -->
     <div id="done-links" class="handoff" hidden>
-      <p><b>報表已更新</b>——入庫筆數見上面的輸出。</p>
+      <p><b>報表已更新</b>——入庫筆數見上面的輸出。重生的是五頁：</p>
       <a class="map" href="dashboard.html">📊 月報</a> ·
       <a class="map" href="query.html">🔎 查詢</a> ·
-      <a class="map" href="year.html">📅 年度回顧</a>
+      <a class="map" href="fda.html">🥫 食安</a> ·
+      <a class="map" href="year.html">📅 年度回顧</a> ·
+      <a class="map" href="map.html">🗺 地圖</a>
     </div>
     <p class="note">
       「每月例行」＝登入 → 抓發票 → 食安清單 → 比對 → 對獎 → 報表 → 備份。
@@ -155,9 +157,6 @@
   const LINKS = document.getElementById("done-links");
   const RUNS = ["run-update", "run-login", "run-export", "run-fetch",
                 "run-import"].map((id) => document.getElementById(id));
-  // 哪些工作跑完之後報表是新的。login/fetch 不在內——它們不重生，
-  // 對它們說「報表已更新」是假話（fetch 只入庫，要另外按重生報表）
-  const REGENERATES = ["export", "update", "import"];
 
   try {
     if (!window.TW) throw new Error("ui.js 沒有載入");
@@ -202,7 +201,10 @@
       busy(running);
       // 「在等你登入」時工作其實沒有進度，狀態燈要說實話
       HANDOFF.hidden = !(running && job.awaiting);
-      LINKS.hidden = !(job.state === "done" && REGENERATES.includes(job.name));
+      // 「報表已更新」由後端說了算（job.regenerates）——哪些工作含重生那一段
+      // 是 jobs 的知識，在這裡另抄一份的話，日後新增一個會重生的工作忘了改，
+      // 連結就靜默不出現。login／fetch 不重生，對它們說這句話是假話
+      LINKS.hidden = !(job.state === "done" && job.regenerates);
       ST.className = "st " + (job.state === "done" ? "done"
         : job.state === "failed" ? "failed"
         : job.state === "cancelled" ? "cancelled" : "running");

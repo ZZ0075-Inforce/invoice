@@ -197,10 +197,26 @@ class _Handler(SimpleHTTPRequestHandler):
 
 def make_server(ws: Workspace, port: int = 8765) -> ThreadingHTTPServer:
     # runner 跟著這台 server 走，不是模組層全域——測試每起一台就有乾淨的一份
-    handler = type("Handler", (_Handler,),
-                   {"ws": ws, "runner": jobs_mod.Runner()})
-    return ThreadingHTTPServer(
+    runner = jobs_mod.Runner()
+    handler = type("Handler", (_Handler,), {"ws": ws, "runner": runner})
+    httpd = ThreadingHTTPServer(
         ("127.0.0.1", port), partial(handler, directory=str(ws.ensure_out())))
+    httpd.runner = runner   # 收站時要用（見 stop）
+    return httpd
+
+
+def stop(httpd: ThreadingHTTPServer) -> None:
+    """收站：先把還在跑的工作收掉，再關 server。
+
+    工作是子行程，serve 結束並不會連帶收掉它——POSIX 上它還自成一個行程群組
+    （中止要殺得掉整棵就得如此），連 Ctrl+C 都收不到。不主動中止的話，關掉
+    視窗留下的正是 issue #21 要防的半死子行程（含底下的 Chromium），而使用者
+    以為自己已經全部停了。
+    """
+    job = httpd.runner.current()
+    if job is not None and job.cancel():
+        print(f"（已中止還在跑的工作：{job.title}）")
+    httpd.server_close()
 
 
 def serve(ws: Workspace, port: int = 8765,
@@ -223,4 +239,4 @@ def serve(ws: Workspace, port: int = 8765,
     except KeyboardInterrupt:
         print("\n已停止。")
     finally:
-        httpd.server_close()
+        stop(httpd)

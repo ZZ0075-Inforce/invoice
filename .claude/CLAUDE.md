@@ -16,7 +16,7 @@ FDA 目前接三個來源：中聯油脂案專區強制下架清單（edible_oil
 ```
 pip install -e .                      # 一律 editable；PyPI 上的 twcrawl 是無關的舊套件
 python -m playwright install chromium # playwright 指令找不到時用這個
-python tests/test_twcrawl.py          # 測試（61/61，不用 pytest）
+python tests/test_twcrawl.py          # 測試（68/68，不用 pytest）
 python tests/test_twcrawl.py --update-golden   # 有意改動五頁畫面後重生 tests/golden/
 
 # 每月例行（一鍵；fetch 區間自動推算、FDA 回溯 90 天只給 feed 型來源）
@@ -190,7 +190,10 @@ src/twcrawl/
 │                 「沒在等人工／沒有工作在跑」時回 409 不假裝成功——訊號檔提早
 │                 躺著，login 真的問起時會被立刻放行。**API 一律擋跨來源**（GET 也擋
 │                 ——工作輸出含使用者資料，不能只靠瀏覽器的 CORS 政策把關）；
-│                 瀏覽器跨來源必帶 Origin，沒帶的（curl／測試的 urllib）放行
+│                 瀏覽器跨來源必帶 Origin，沒帶的（curl／測試的 urllib）放行。
+│                 `stop(httpd)`＝收站：**先中止還在跑的工作再關 server**。工作是
+│                 子行程，serve 結束不會連帶收掉它（POSIX 上它自成一個行程群組，
+│                 連 Ctrl+C 都收不到），不主動中止的話關掉視窗就留下半死的子行程
 ├── operator_signal.py  人工交接的訊號協定（#21）：`TWCRAWL_DONE_FILE` 的變數名、
 │                 「我在等人工」的機器可讀標記（`AWAITING_LINE`）、送出／收下
 │                 訊號檔。**兩端在不同行程**——等的一端是子行程
@@ -213,6 +216,11 @@ src/twcrawl/
 │                 重生請求的話，關掉分頁就靜默留下舊報表，而使用者不會知道自己
 │                 看到的是舊的。前一段非零就不做下一段；`job.cancelled` 讓中止
 │                 在**兩段之間**也收得了手（那一刻沒有行程可殺）。
+│                 「跑完報表是不是新的」＝`REGENERATING`（指令名，update 自己
+│                 的第 6 步就是 export），由 `snapshot` 帶 `regenerates` 給頁面
+│                 ——**頁面不准自己列一份**，漏改的失敗方式是連結靜默不出現。
+│                 `EXPORT_STEP` 同理：重生那一段有兩個用處（單獨的重生報表、
+│                 import 的第二段），各打一遍遲早會漂。
 │                 import 的路徑沒辦法像月份那樣驗形狀，只擋「會被誤讀成別的
 │                 東西」的：空字串、換行、以 `-` 開頭（argparse 會當旗標吃掉，
 │                 `import --help` 印完說明以 0 收場，看起來像匯入成功），並脫掉
@@ -261,8 +269,9 @@ src/twcrawl/
 │                 真走選檔就得上傳整個檔案再落地一份到暫存目錄，而那份是消費
 │                 紀錄，多一份就多一個要記得刪的地方；貼路徑則一個位元組都不
 │                 必搬（去引號在後端做，兩邊各做一次遲早只剩一邊）。
-│                 「報表已更新」的連結只在 export／update／import 成功後出現
-│                 ——login／fetch 不重生，對它們說這句話是假話。登入交接區
+│                 「報表已更新」的五頁連結只在工作成功**且** `job.regenerates`
+│                 時出現（旗標由 jobs 算，頁面不列自己的清單）——login／fetch
+│                 不重生，對它們說這句話是假話。登入交接區
 │                 **只在子行程真的在等的時候才出現**（job.awaiting）——提早按，
 │                 訊號檔會躺在那裡，login 真正問起時立刻被放行，人還沒動手。
 │                 卡在交接時狀態燈說「等你登入」不說「執行中」（後者會讓人以為
@@ -745,6 +754,21 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   一段，`job.cancelled` 讓中止在兩段之間也收得了手。收路徑不收選檔視窗的
   理由見架構條目（少搬一份消費紀錄）。測試 65→67（真的匯入一個 CSV 並斷言
   `data.js` 出現剛匯入的店家＝重生真的發生了；頁面成功／失敗兩種顯示）
+- ✅ #21／#19／#22 兩軸 review 補修（2026-08-02，三張票一起跑一次）：
+  Standards 抓到三處文件說假話（本檔測試數、README「四顆按鈕」、CONTEXT.md
+  「工作」只有三種狀態——`cancelled` 是 #21 生出來的第四種）與一個**清單複製
+  第二份**：control.html 自己列了「哪些工作會重生報表」，jobs 那邊新增一個就
+  靜默漏掉 → 改由 `snapshot` 帶 `regenerates`，測試刻意讓旗標與工作名錯開
+  （名字仍是 import 但旗標 false，退回名字比對就會紅）；`EXPORT_STEP` 收成
+  一份。Spec 抓到兩個真缺口：①`import` 的**品項欄名對不上會靜默丟掉整份
+  明細**（`if mi.get("description")` 直接跳過，摘要照樣說匯入完成、明細 0 列）
+  → 新增 `no_item_rows` 並在摘要點名兼給出路；②serve 收站不管還在跑的工作
+  （POSIX 上子行程自成行程群組，連 Ctrl+C 都收不到）→ `serve.stop()` 先中止
+  再關站。另補：#22 的連結補齊五頁、失敗那條路改用真子行程驗「沿用指令端
+  訊息」。CONTEXT.md 補「人工交接」「匯入」兩個詞條。**駁回**：`cmd_import`
+  的 ws 參數（同層 `cmd_*` 一致）、`serve(page=...)` 收字串（`--control` 布林
+  已在 cli，改了只是換地方複雜）、以及「登入按鈕算 scope creep」——它是 token
+  過期時「重跑 login」那句話的唯一出口。測試 67→68
 - ⬜ 緩辦（要做先問）：CSV 匯出（分類趨勢圖已做＝#11；地圖店家搜尋立案為 #15）
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

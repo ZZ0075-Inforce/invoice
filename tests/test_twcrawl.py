@@ -478,6 +478,18 @@ def test_import_csv_counts_idempotence_and_guards():
             commands.cmd_import(conn, ws, src)       # 同一個檔案再跑一次
             assert counts() == (2, 3), f"重跑不該長出重複列，實際：{counts()}"
 
+            # 品項欄名對不上：發票照樣進得去，但整份明細會**靜默**消失——
+            # 寬表是一列一品項，所以這件事一定要講出來，否則摘要會說
+            # 「匯入完成…明細 0 列」然後以 0 收場
+            odd = Path(td) / "欄名不同.csv"
+            odd.write_text(
+                csv_text.replace("消費明細_品名", "品項描述"), encoding="utf-8-sig")
+            res2 = commands.cmd_import(conn, ws, odd)
+            assert res2["items"] == 0 and res2["no_item_rows"] == 3, res2
+            warn = commands.format_import(res2)
+            assert "解不出品項" in warn and "欄位名" in warn, \
+                f"品項欄名對不上要講出來並給出路：{warn}"
+
             # 壞檔三種：都要是人話，而不是 traceback，也不是「匯入完成 0 筆」
             bad = Path(td) / "bad.csv"
             bad.write_text("", encoding="utf-8")
@@ -2086,6 +2098,8 @@ def test_serve_jobs_runs_export_in_subprocess():
 
             code, j = _post_json(port, "/api/jobs", {"cmd": "export"})
             assert code == 202 and j["ok"], f"啟動工作失敗：{code} {j}"
+            # 「跑完報表就是新的嗎」由後端算給頁面（jobs.REGENERATING）
+            assert j["job"]["regenerates"] is True, j["job"]
 
             # 「同時只准一個」要在工作確實還在跑的時候問才算數。先讀一次狀態
             # 把這件事變成斷言——原本是默默假設「子行程啟動夠慢」，那是競態，
@@ -2160,6 +2174,8 @@ def test_serve_jobs_runs_export_in_subprocess():
             assert code8 == 202, f"合格的 fetch 參數該被接受：{code8} {j8}"
             assert "2026-01" in j8["job"]["title"], \
                 f"標題要說出抓的區間，實際：{j8['job']['title']!r}"
+            assert j8["job"]["regenerates"] is False, \
+                "fetch 只入庫不重生，說「報表已更新」是假話"
 
             deadline = time.time() + 180
             cursor, lines, state = 0, [], "running"
@@ -2181,6 +2197,49 @@ def test_serve_jobs_runs_export_in_subprocess():
             httpd.server_close()
     print("✓ serve：/api/jobs 起子行程跑 export／fetch（輸出可取、同時只准一個、"
           "白名單、參數驗形狀、跨來源與 signal／cancel 的 409）")
+
+
+def test_serve_stop_cancels_running_job():
+    """收站要把還在跑的工作一起收掉。
+
+    工作是子行程，serve 結束不會連帶收掉它——POSIX 上它還自成一個行程群組，
+    連 Ctrl+C 都收不到。不主動中止的話，關掉視窗留下的正是 #21 要防的半死
+    子行程，而使用者以為自己已經全部停了。用假的 runner 驗接線：真的行程樹
+    有沒有被殺乾淨由 test_jobs_cancel_kills_process_tree 顧，這裡要釘的是
+    「收站這條路徑會去按那個中止」——它只在 Ctrl+C 時走到，最容易漏。
+    """
+    from twcrawl import serve as serve_mod
+    from twcrawl.workspace import Workspace
+
+    class _FakeJob:
+        title = "假工作"
+
+        def __init__(self):
+            self.cancelled = False
+
+        def cancel(self):
+            self.cancelled = True
+            return True
+
+    class _FakeRunner:
+        def __init__(self, job):
+            self._job = job
+
+        def current(self):
+            return self._job
+
+    with TemporaryDirectory() as td:
+        ws = Workspace(Path(td))
+        job = _FakeJob()
+        httpd = serve_mod.make_server(ws, port=0)
+        httpd.runner = _FakeRunner(job)
+        serve_mod.stop(httpd)
+        assert job.cancelled, "收站沒有中止還在跑的工作＝關掉視窗留下孤兒子行程"
+
+        # 沒有工作在跑時收站也要好好收（不能因為 current() 是 None 就炸）
+        httpd2 = serve_mod.make_server(ws, port=0)
+        serve_mod.stop(httpd2)
+    print("✓ serve：收站會中止還在跑的工作（沒有工作時也收得乾淨）")
 
 
 def test_serve_import_job_regenerates_reports():
@@ -2247,6 +2306,30 @@ def test_serve_import_job_regenerates_reports():
             data_js = (ws.out / "data.js").read_text(encoding="utf-8")
             assert "匯入測試店" in data_js, \
                 "匯入完必須自動重生報表，否則使用者看到的是舊的而不自知"
+
+            # 失敗那條路：頁面顯示的是**指令端既有的訊息**，控制台不另寫一套
+            # （#22 驗收條件）。所以這裡跑真的子行程，斷言那句人話收得到
+            code, j = _post_json(
+                port, "/api/jobs",
+                {"cmd": "import", "params": {"path": str(Path(td) / "沒有.csv")}})
+            assert code == 202, f"{code} {j}"
+            deadline = time.time() + 120
+            cursor, lines, state = 0, [], "running"
+            while time.time() < deadline:
+                with urllib.request.urlopen(
+                        f"http://127.0.0.1:{port}"
+                        f"/api/jobs/current?since={cursor}") as r:
+                    snap = json.loads(r.read().decode("utf-8"))["job"]
+                lines += snap["lines"]
+                cursor, state = snap["next"], snap["state"]
+                if state != "running":
+                    break
+                time.sleep(0.2)
+            assert state == "failed", f"檔案不存在該收在 failed：{state}／{lines}"
+            assert any("找不到檔案" in ln for ln in lines), \
+                f"該原樣收到指令端的人話訊息，實際：{lines}"
+            assert not any("2/2" in ln for ln in lines), \
+                "第一段失敗就不該再重生報表（那會蓋掉現有的）"
         finally:
             httpd.shutdown()
             httpd.server_close()
@@ -2377,13 +2460,16 @@ def test_control_page_import_result_display():
     # 檔案總管的「複製檔案路徑」連引號一起給——頁面原樣送出，去引號在後端
     # 做（一個地方做就好，兩邊各做一次遲早只剩一邊）
     pasted = '"C:\\Users\\me\\Downloads\\匯出.csv"'
+    # regenerates 由後端算（jobs.REGENERATING）——頁面只讀它，不自己列清單
     ok_job = {"id": 1, "name": "import", "title": "匯入 匯出.csv",
               "state": "done", "returncode": 0, "awaiting": False,
+              "regenerates": True,
               "lines": ["=== 1/2 twcrawl import … ===",
                         "=== 匯入完成 ===", "  發票 2 筆、明細 3 列入庫"],
               "next": 3, "dropped": 0}
     bad_job = {"id": 2, "name": "import", "title": "匯入 junk.csv",
                "state": "failed", "returncode": 1, "awaiting": False,
+               "regenerates": True,   # 有重生那一段，但這輪沒跑到
                "lines": ["認不得這個 CSV 的格式（junk.csv）"],
                "next": 1, "dropped": 0}
 
@@ -2419,6 +2505,16 @@ def test_control_page_import_result_display():
                 page.wait_for_selector("#out:has-text('認不得')", timeout=5000)
                 assert not page.is_visible("#done-links"), \
                     "匯入失敗時說「報表已更新」就是假話"
+
+                # 旗標與工作名**刻意錯開**：名字仍是 import（前端若自己列
+                # 一份「會重生的工作」清單就會照舊顯示連結），但後端說這個
+                # 工作沒有重生那一段——頁面必須聽後端的
+                page.evaluate("(j) => { window.__job = j; }",
+                              {**ok_job, "id": 3, "regenerates": False})
+                page.click("#run-import")
+                page.wait_for_selector("#state:has-text('完成')", timeout=5000)
+                assert not page.is_visible("#done-links"), \
+                    "「報表已更新」要看後端的 regenerates，不是看工作名字"
                 assert not errs, f"control.html 有 JS 錯誤：{errs}"
                 page.close()
             finally:

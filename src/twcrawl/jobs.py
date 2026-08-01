@@ -41,6 +41,16 @@ MONTH_RE = re.compile(r"^\d{4}-(?:0[1-9]|1[0-2])$")
 # 就靜默留下舊報表——而使用者不會知道自己看到的是舊的。
 Steps = list[list[str]]
 
+# 重生報表那一段。export 帶 --no-open：在伺服器端替使用者開瀏覽器是錯的
+# （工作可能是別的分頁按下去的），頁面自己有連結。寫成常數是因為它現在有
+# 兩個用處（單獨的「重生報表」與 import 的第二段），各打一遍遲早會漂。
+EXPORT_STEP = ["export", "--no-open"]
+
+# 跑完之後報表是新的指令（update 自己的第 6 步就是 export）。**這份知識只能
+# 有一份**：頁面照著 snapshot 的 regenerates 決定要不要說「報表已更新」，
+# 複製一份到前端的話，日後新增一個會重生的工作忘了改那邊，連結會靜默不出現。
+REGENERATING = frozenset({"export", "update"})
+
 
 class BadParams(ValueError):
     """參數不合格。訊息是人話，會原樣送回頁面顯示。"""
@@ -92,7 +102,7 @@ def _import(params: dict) -> tuple[Steps, str]:
         raise BadParams("路徑不能以 - 開頭")
     if "\n" in raw or "\r" in raw:
         raise BadParams("路徑不能含換行——請只貼一個檔案的路徑")
-    return [["import", raw], ["export", "--no-open"]], f"匯入 {Path(raw).name}"
+    return [["import", raw], list(EXPORT_STEP)], f"匯入 {Path(raw).name}"
 
 
 # 控制台能啟動的工作白名單。**端點收到的是名稱與具名參數、不是 argv**——
@@ -100,13 +110,10 @@ def _import(params: dict) -> tuple[Steps, str]:
 # 串進去：每個值都由上面的 builder 驗過形狀（月份必須是 YYYY-MM），argv
 # 的組法留在這個模組裡。
 #
-# export 帶 --no-open：在伺服器端替使用者開瀏覽器是錯的（工作可能是別的
-# 分頁按下去的），頁面自己有連結。update 的 export 步驟同理。
-#
 # login 單獨也給一顆：token 過期時 fetch 會回 401 並要你「重跑 login」
 # （CLAUDE.md「已知的坑」），控制台沒有這顆的話那句話就沒有出口。
 ALLOWED: dict[str, Callable[[dict], tuple[Steps, str]]] = {
-    "export": _no_params(["export", "--no-open"], "重生報表"),
+    "export": _no_params(EXPORT_STEP, "重生報表"),
     "update": _no_params(["update", "--no-open"], "每月例行"),
     "login": _no_params(["login"], "登入"),
     "fetch": _fetch,
@@ -150,6 +157,8 @@ class Job:
         self.name = name
         self.steps = steps
         self.title = title
+        # 「跑完報表就是新的嗎」由這裡算，頁面只讀（見 REGENERATING）
+        self.regenerates = any(s and s[0] in REGENERATING for s in steps)
         self.done_file = done_file
         self.returncode: int | None = None
         self._lines: list[str] = []
@@ -247,6 +256,7 @@ class Job:
                 "title": self.title,
                 "state": self._state_locked(),
                 "returncode": self.returncode,
+                "regenerates": self.regenerates,
                 # 「在等人工」只有工作還活著時才成立
                 "awaiting": self._awaiting and self.returncode is None,
                 "lines": self._lines[start:],

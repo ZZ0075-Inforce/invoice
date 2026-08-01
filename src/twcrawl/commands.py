@@ -149,6 +149,12 @@ def format_import(res: dict) -> str:
         # 略過幾列一定要說。不說的話，欄位對不上的檔案會匯入成功卻只進一半
         out.append(f"  ！{res['rows']} 列裡有 {res['skipped']} 列找不到發票號碼，"
                    "已略過（頁尾或統計列的話屬正常）")
+    if res.get("no_item_rows"):
+        # 寬表是一列一品項，所以「有發票沒品項」多半是品名欄名對不上——
+        # 不講的話，整份明細會靜默消失而摘要照樣說匯入完成
+        out.append(f"  ！有 {res['no_item_rows']} 列解不出品項"
+                   "（檔案本來就只有發票表頭的話屬正常；否則是品項欄名對不上，"
+                   "→ 提供第一列的欄位名即可補上規則）")
     out.append("  → 接著跑 `twcrawl export` 重生報表就看得到。")
     return "\n".join(out)
 

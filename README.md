@@ -138,7 +138,8 @@ twcrawl import "C:\Users\你\Downloads\匯出檔.csv"
 - 只印筆數，不印金額與店家名
 - 略過的列會**明講幾列**（頁尾／統計列屬正常）——靜默丟棄的話，欄位對不上的
   檔案會「匯入成功」卻只進一半，而這條路一年跑不到一次，等看報表少一整年才
-  發現就太遲了
+  發現就太遲了。同理，解不出品項的列也會明講：寬表是一列一品項，「明細 0 列」
+  多半代表品名欄名對不上，而不是這個檔案真的沒有明細
 - 檔案不存在、空檔、只有表頭、認不得的格式，各有各的人話訊息與下一步
 
 > 目前只支援**已知的平台 CSV 格式**。若你的檔案匯不進去，工具會說它讀到幾列幾欄
@@ -242,7 +243,7 @@ twcrawl export --no-open  # 只產出，不開瀏覽器
 #### 控制台：從頁面按按鈕跑工作
 
 `serve` 之下還多一頁**控制台**（各頁右上的「🎛 控制台」進得去，或雙擊
-`twcrawl-console.bat` 直接開）。四顆按鈕：
+`twcrawl-console.bat` 直接開）。五顆按鈕：
 
 | 按鈕 | 做的事 |
 |---|---|
@@ -423,7 +424,7 @@ twcrawl probe <url> # 頁面結構偵察報告（表格 id、表頭、分頁連�
 ## 測試
 
 ```powershell
-python tests\test_twcrawl.py                    # 67 個測試，不需要 pytest
+python tests\test_twcrawl.py                    # 68 個測試，不需要 pytest
 python tests\test_twcrawl.py --update-golden    # 有意改動畫面後重生頁面快照
 ```
 
