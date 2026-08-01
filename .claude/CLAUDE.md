@@ -16,7 +16,7 @@ FDA 目前接三個來源：中聯油脂案專區強制下架清單（edible_oil
 ```
 pip install -e .                      # 一律 editable；PyPI 上的 twcrawl 是無關的舊套件
 python -m playwright install chromium # playwright 指令找不到時用這個
-python tests/test_twcrawl.py          # 測試（59/59，不用 pytest）
+python tests/test_twcrawl.py          # 測試（60/60，不用 pytest）
 python tests/test_twcrawl.py --update-golden   # 有意改動五頁畫面後重生 tests/golden/
 
 # 每月例行（一鍵；fetch 區間自動推算、FDA 回溯 90 天只給 feed 型來源）
@@ -603,8 +603,18 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   收斂雙模式判準（本來各頁各寫一份）。`jobs.py` 開頭「這個坑消失」的敘述
   範圍也收窄成實話——`/api/rules` 仍走進程內重生。測試 56→59；golden 零 diff
   （入口只在 serve 模式注入，而快照走 file://）
-- ⬜ 「操作更順手」批次剩餘：#17 restore、#18 一鍵啟動器、#19 import（皆無
-  阻塞）、#21 長工＋啟動器改指向（等 #18／#20）、#22 控制台匯入（等 #19／#20）
+- ✅ 一鍵啟動器（2026-08-02，issue #18）：工作區的 `twcrawl-update.bat` 雙擊
+  就跑完整輪 `update`，不必開終端機或 activate venv；成功安靜收工（儀表板
+  自己會開），失敗則視窗留著顯示是哪一步、按 Enter 才關。以檔案所在目錄為
+  工作區，捷徑放哪都不會跑錯地方。**實作是 ASCII 純殼 .bat ＋ .ps1 主體**
+  ——原本寫成單一 .bat，實測發現 cmd.exe 用主控台的 OEM codepage（繁中
+  Windows 是 cp950）**逐位元組解析批次檔**，UTF-8 中文被當 Big5 讀而把指令列
+  切成假指令（跑出 'WL'、'安清單'），結束碼還錯回 0；`chcp 65001` 救不了，
+  因為壞在解析階段。中文訊息因此全在 .ps1（存成 UTF-8 with BOM，Windows
+  PowerShell 5.1 沒 BOM 會用 ANSI 讀）。三條路徑都實測過：缺 venv、工作
+  失敗、結束碼傳遞。測試 59→60（缺 venv 那條，中文被搬回 .bat 就會變紅）
+- ⬜ 「操作更順手」批次剩餘：#17 restore、#19 import（皆無阻塞）、
+  #21 長工＋啟動器改指向（等 #20 已備妥，#18 也已完成）、#22 控制台匯入（等 #19）
 - ⬜ 緩辦（要做先問）：CSV 匯出（分類趨勢圖已做＝#11；地圖店家搜尋立案為 #15）
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

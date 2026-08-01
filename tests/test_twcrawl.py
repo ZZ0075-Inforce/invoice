@@ -1624,6 +1624,39 @@ def _post_json(port: int, path: str, payload: dict, origin: str | None = None):
         return e.code, json.loads(e.read().decode("utf-8"))
 
 
+def test_launcher_explains_missing_venv():
+    """一鍵啟動器（#18）：不在工作區時給人話並回非零，而不是閃退。
+
+    順帶釘住編碼這件事：中文一旦被搬回 .bat，cmd 會拿主控台的 OEM codepage
+    （繁中 Windows 是 cp950）逐位元組解析 UTF-8，指令列被切成假指令、結束碼
+    還會錯回 0（實測過）。所以主體在 .ps1、.bat 保持純 ASCII——搬回去的話
+    這支測試會變紅。
+    """
+    import shutil
+    import subprocess
+
+    if sys.platform != "win32":
+        print("✓ 一鍵啟動器：非 Windows，略過")
+        return
+
+    root = Path(__file__).resolve().parent.parent
+    with TemporaryDirectory() as td:
+        td = Path(td)
+        for name in ("twcrawl-update.bat", "twcrawl-update.ps1"):
+            shutil.copyfile(root / name, td / name)
+        # 這個暫存目錄沒有 .venv，所以走的是「不在工作區」那條路
+        p = subprocess.run(
+            [str(td / "twcrawl-update.bat")], cwd=str(td),
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=180)
+
+    out = p.stdout + p.stderr
+    assert p.returncode != 0, f"找不到 venv 該回非零，卻回 {p.returncode}"
+    assert "找不到" in out and "虛擬環境" in out, \
+        f"該給人話提示且中文未被 cmd 的 codepage 切壞，實際輸出：{out!r}"
+    print("✓ 一鍵啟動器：缺 venv 給人話並回非零（中文未被 cmd 解析壞）")
+
+
 def test_jobs_runner_recovers_when_job_cannot_start():
     """工作起不來也一定要收尾，否則 runner 永久 Busy、控制台再也按不動。
 

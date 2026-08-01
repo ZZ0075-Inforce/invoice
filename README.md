@@ -275,6 +275,20 @@ FDA 回溯 90 天（只對回收公告、國際警訊這類依日期排序的來
 儀表板拿既有資料重生仍然有意義（儀表板會顯示「已 N 天沒有新發票」）。
 按 Ctrl+C 則會中止整輪。
 
+#### 一鍵啟動（不開終端機）
+
+工作區裡的 **`twcrawl-update.bat`** 雙擊就會跑上面那一整輪，不必先開終端機、
+也不必 activate venv。成功就自動開儀表板然後安靜收工；**任一步失敗則視窗留著**，
+顯示是哪一步沒過，按 Enter 才關。
+
+放到桌面的做法：在 `twcrawl-update.bat` 上按右鍵 →「傳送到」→「桌面（建立捷徑）」。
+捷徑不論放哪裡都以**這個檔所在的目錄**當工作區，所以不會跑錯地方。
+
+> 實作上是一層 ASCII 的 `.bat` 殼呼叫 `twcrawl-update.ps1`。原因是 cmd.exe 會用
+> 主控台的 OEM codepage（繁中 Windows 為 cp950）逐位元組解析批次檔，UTF-8 的中文
+> 會被切成假指令、結束碼還會錯回 0；`chcp` 救不了，因為壞在解析階段。中文訊息
+> 因此全放在 PowerShell 那一半。
+
 ---
 
 ## 維護與除錯指令
@@ -323,7 +337,7 @@ twcrawl probe <url> # 頁面結構偵察報告（表格 id、表頭、分頁連�
 ## 測試
 
 ```powershell
-python tests\test_twcrawl.py                    # 59 個測試，不需要 pytest
+python tests\test_twcrawl.py                    # 60 個測試，不需要 pytest
 python tests\test_twcrawl.py --update-golden    # 有意改動畫面後重生頁面快照
 ```
 
