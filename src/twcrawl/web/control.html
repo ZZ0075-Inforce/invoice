@@ -33,9 +33,12 @@
   button.stop { border: 1px solid var(--s2); background: transparent;
                 color: var(--s2); border-radius: 8px; padding: 6px 14px;
                 cursor: pointer; font: inherit; font-size: 13px; }
-  input[type=month] { border: 1px solid var(--border); border-radius: 6px;
-                      background: var(--surface-1); color: var(--text-1);
-                      font: inherit; font-size: 13px; padding: 5px 8px; }
+  input[type=month], input[type=text] {
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--surface-1); color: var(--text-1);
+    font: inherit; font-size: 13px; padding: 5px 8px;
+  }
+  input[type=text] { min-width: 22em; max-width: 100%; }
   label.range { color: var(--text-2); font-size: 13px; }
   .st { font-size: 13px; font-weight: 600; }
   .st.idle { color: var(--muted); }
@@ -99,6 +102,20 @@
       </label>
       <button class="run" id="run-fetch">抓發票</button>
     </div>
+    <div class="row">
+      <!-- 貼路徑而不是 <input type=file>：瀏覽器只會給檔名不給路徑，真要走
+           選檔就得把整個檔案上傳、再落地一份到某個暫存目錄——那份是消費
+           紀錄，多一份就多一個要記得刪的地方。貼路徑則一個位元組都不必搬。 -->
+      <label class="range">匯入 CSV：
+        <input type="text" id="import-path" placeholder="貼上 CSV 檔案的完整路徑">
+      </label>
+      <button class="run" id="run-import">匯入</button>
+    </div>
+    <p class="note" id="import-hint">
+      歷年資料的唯一入口（平台查不到的月份只能靠手上的檔案）。在檔案總管按
+      <b>Shift＋右鍵</b> →「複製檔案路徑」，貼進來就好（連引號一起貼也沒關係）。
+      匯入完會自動重生報表。
+    </p>
 
     <!-- 人工交接：登入有圖形驗證碼，這一步無法自動（CLAUDE.md 已定案）。
          只在子行程真的在等的時候才出現——提早按下去，訊號檔會躺在那裡，
@@ -110,6 +127,14 @@
     </div>
 
     <pre id="out"></pre>
+
+    <!-- 重生過報表的工作跑完才出現：筆數在輸出裡，這裡給的是「現在去看」 -->
+    <div id="done-links" class="handoff" hidden>
+      <p><b>報表已更新</b>——入庫筆數見上面的輸出。</p>
+      <a class="map" href="dashboard.html">📊 月報</a> ·
+      <a class="map" href="query.html">🔎 查詢</a> ·
+      <a class="map" href="year.html">📅 年度回顧</a>
+    </div>
     <p class="note">
       「每月例行」＝登入 → 抓發票 → 食安清單 → 比對 → 對獎 → 報表 → 備份。
       一步失敗會記錄下來、其餘照跑，結尾有彙總。
@@ -127,8 +152,12 @@
   const NEED = document.getElementById("need-serve");
   const HANDOFF = document.getElementById("handoff");
   const CANCEL = document.getElementById("cancel");
-  const RUNS = ["run-update", "run-login", "run-export", "run-fetch"]
-    .map((id) => document.getElementById(id));
+  const LINKS = document.getElementById("done-links");
+  const RUNS = ["run-update", "run-login", "run-export", "run-fetch",
+                "run-import"].map((id) => document.getElementById(id));
+  // 哪些工作跑完之後報表是新的。login/fetch 不在內——它們不重生，
+  // 對它們說「報表已更新」是假話（fetch 只入庫，要另外按重生報表）
+  const REGENERATES = ["export", "update", "import"];
 
   try {
     if (!window.TW) throw new Error("ui.js 沒有載入");
@@ -173,6 +202,7 @@
       busy(running);
       // 「在等你登入」時工作其實沒有進度，狀態燈要說實話
       HANDOFF.hidden = !(running && job.awaiting);
+      LINKS.hidden = !(job.state === "done" && REGENERATES.includes(job.name));
       ST.className = "st " + (job.state === "done" ? "done"
         : job.state === "failed" ? "failed"
         : job.state === "cancelled" ? "cancelled" : "running");
@@ -237,6 +267,7 @@
 
     async function run(cmd, params) {
       busy(true);
+      LINKS.hidden = true;   // 上一輪的「報表已更新」不能留到這一輪
       ST.className = "st running"; ST.textContent = "啟動中…";
       try {
         const {status, body} = await post("/api/jobs", {cmd: cmd, params: params});
@@ -265,6 +296,8 @@
     document.getElementById("run-fetch").addEventListener("click", () => run(
       "fetch", {from: document.getElementById("from").value,
                 to: document.getElementById("to").value}));
+    document.getElementById("run-import").addEventListener("click", () => run(
+      "import", {path: document.getElementById("import-path").value}));
 
     document.getElementById("done-login").addEventListener("click", async () => {
       HANDOFF.hidden = true;    // 按一次就好，別讓人連按

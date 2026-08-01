@@ -1930,7 +1930,7 @@ def test_operator_signal_handoff():
 
     # ② 按按鈕的一端：認得標記才亮按鈕，按下去寫的是子行程正在等的那條路徑
     with TemporaryDirectory() as td:
-        job = jobs.Job(1, "login", ["login"], "登入", Path(td) / "done")
+        job = jobs.Job(1, "login", [["login"]], "登入", Path(td) / "done")
         assert not job.snapshot()["awaiting"]
         assert job.signal_operator() is False, \
             "沒在等人工就不該放訊號檔——提早放下去，login 真的問起時會被立刻放行"
@@ -2042,7 +2042,7 @@ def test_jobs_cancel_kills_process_tree():
     # 中止比行程起來早一步按下：attach 要把這件事回報給 _run，否則沒有人去殺
     # 它，工作會一路跑完而頁面顯示已中止
     with TemporaryDirectory() as td:
-        job = jobs.Job(1, "update", ["update"], "每月例行", Path(td) / "done")
+        job = jobs.Job(1, "update", [["update"]], "每月例行", Path(td) / "done")
         assert job.cancel() is True
         assert job.attach(object()) is True, \
             "先按中止、行程才起來的話，attach 必須回報「已經被中止了」"
@@ -2183,6 +2183,76 @@ def test_serve_jobs_runs_export_in_subprocess():
           "白名單、參數驗形狀、跨來源與 signal／cancel 的 409）")
 
 
+def test_serve_import_job_regenerates_reports():
+    """控制台的匯入：真的入庫，而且**同一個工作**接著把報表重生（#22）。
+
+    這個保證刻意放在工作執行器而不是頁面：頁面在工作結束後再送一次重生請求
+    的話，使用者關掉分頁就靜默留下舊報表——而他不會知道自己看到的是舊的。
+    所以這裡用真的子行程跑完整條鏈，斷言 data.js 裡有剛匯入的店家。
+    """
+    import threading
+    import time
+    import urllib.request
+
+    from twcrawl import serve as serve_mod
+    from twcrawl.workspace import Workspace
+
+    csv_text = (
+        "發票日期,發票號碼,發票金額,賣方統一編號,賣方名稱,"
+        "消費明細_數量,消費明細_單價,消費明細_金額,消費明細_品名\n"
+        "2026/06/15,AB12345678,168,22555003,匯入測試店,2,35,70,測試品甲\n"
+    )
+
+    with TemporaryDirectory() as td:
+        ws = Workspace(Path(td))
+        ws.ensure_out()
+        db.connect(ws.db).close()          # serve 起站要有資料庫
+        src = Path(td) / "來源.csv"
+        src.write_text(csv_text, encoding="utf-8-sig")
+
+        httpd = serve_mod.make_server(ws, port=0)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            port = httpd.server_address[1]
+
+            # 路徑沒辦法像月份那樣驗形狀，但「會被誤讀成別的東西」的要擋：
+            # 以 - 開頭會被 argparse 當旗標，`import --help` 印完說明以 0 收場
+            for bad, want in [({"path": ""}, "指定"),
+                              ({"path": "--help"}, "- 開頭")]:
+                code, j = _post_json(port, "/api/jobs",
+                                     {"cmd": "import", "params": bad})
+                assert code == 400 and want in j["error"], f"{bad}：{code} {j}"
+
+            code, j = _post_json(port, "/api/jobs",
+                                 {"cmd": "import", "params": {"path": f'"{src}"'}})
+            assert code == 202, f"匯入該被接受（含檔案總管複製來的引號）：{code} {j}"
+
+            deadline = time.time() + 240
+            cursor, lines, state = 0, [], "running"
+            while time.time() < deadline:
+                with urllib.request.urlopen(
+                        f"http://127.0.0.1:{port}"
+                        f"/api/jobs/current?since={cursor}") as r:
+                    snap = json.loads(r.read().decode("utf-8"))["job"]
+                lines += snap["lines"]
+                cursor, state = snap["next"], snap["state"]
+                if state != "running":
+                    break
+                time.sleep(0.2)
+
+            assert state == "done", f"匯入工作沒有成功收尾：{state}／{lines}"
+            assert any("匯入完成" in ln for ln in lines), f"看不到匯入摘要：{lines}"
+            assert any("2/2" in ln for ln in lines), \
+                f"兩段都要跑（匯入→重生），實際輸出：{lines}"
+            data_js = (ws.out / "data.js").read_text(encoding="utf-8")
+            assert "匯入測試店" in data_js, \
+                "匯入完必須自動重生報表，否則使用者看到的是舊的而不自知"
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+    print("✓ 控制台匯入：路徑驗形狀、真的入庫，且同一個工作接著重生報表")
+
+
 def test_control_page_login_handoff_and_cancel():
     """控制台的長工三件事（#21）：登入交接、中止、fetch 的區間參數。
 
@@ -2278,6 +2348,83 @@ def test_control_page_login_handoff_and_cancel():
                 httpd.server_close()
     print("✓ 控制台：等人工時亮出「我已登入」（送 signal）、中止不算失敗、"
           "fetch 帶具名區間參數")
+
+
+def test_control_page_import_result_display():
+    """控制台匯入的兩種收場（#22）：成功給連結、失敗照實說。
+
+    後端由 test_serve_import_job_regenerates_reports 驗；這裡只看頁面——
+    「報表已更新」那塊在失敗時**不可以**出現，那句話的意思是「現在去看是新的」。
+    """
+    import threading
+
+    from twcrawl import serve as serve_mod
+    from twcrawl.workspace import Workspace
+
+    stub = """
+      () => {
+        window.__posts = [];
+        window.__job = null;
+        window.fetch = async (url, opts) => {
+          if (opts && opts.method === "POST") {
+            window.__posts.push({url: url, body: JSON.parse(opts.body)});
+          }
+          return {status: opts && opts.method === "POST" ? 202 : 200,
+                  json: async () => ({ok: true, job: window.__job})};
+        };
+      }
+    """
+    # 檔案總管的「複製檔案路徑」連引號一起給——頁面原樣送出，去引號在後端
+    # 做（一個地方做就好，兩邊各做一次遲早只剩一邊）
+    pasted = '"C:\\Users\\me\\Downloads\\匯出.csv"'
+    ok_job = {"id": 1, "name": "import", "title": "匯入 匯出.csv",
+              "state": "done", "returncode": 0, "awaiting": False,
+              "lines": ["=== 1/2 twcrawl import … ===",
+                        "=== 匯入完成 ===", "  發票 2 筆、明細 3 列入庫"],
+              "next": 3, "dropped": 0}
+    bad_job = {"id": 2, "name": "import", "title": "匯入 junk.csv",
+               "state": "failed", "returncode": 1, "awaiting": False,
+               "lines": ["認不得這個 CSV 的格式（junk.csv）"],
+               "next": 1, "dropped": 0}
+
+    with TemporaryDirectory() as td:
+        ws = Workspace(Path(td))
+        _stage_pages(ws, a_payload())
+        with browser_context(session_file=None, headed=False) as ctx:
+            httpd = serve_mod.make_server(ws, port=0)
+            threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            try:
+                port = httpd.server_address[1]
+                page = ctx.new_page()
+                errs = []
+                page.on("pageerror", lambda e: errs.append(f"pageerror: {e}"))
+                page.goto(f"http://127.0.0.1:{port}/control.html")
+                page.evaluate(stub)
+
+                page.evaluate("(j) => { window.__job = j; }", ok_job)
+                page.fill("#import-path", pasted)
+                page.click("#run-import")
+                page.wait_for_selector("#state:has-text('完成')", timeout=5000)
+                page.wait_for_selector("#out:has-text('發票 2 筆')", timeout=5000)
+                assert page.is_visible("#done-links"), \
+                    "匯入成功後要給得出「現在去看」的連結"
+                posts = page.evaluate("() => window.__posts")
+                assert posts[0]["body"] == {
+                    "cmd": "import", "params": {"path": pasted}}, \
+                    f"頁面該原樣送出貼上的路徑，實際：{posts[0]['body']}"
+
+                page.evaluate("(j) => { window.__job = j; }", bad_job)
+                page.click("#run-import")
+                page.wait_for_selector("#state:has-text('失敗')", timeout=5000)
+                page.wait_for_selector("#out:has-text('認不得')", timeout=5000)
+                assert not page.is_visible("#done-links"), \
+                    "匯入失敗時說「報表已更新」就是假話"
+                assert not errs, f"control.html 有 JS 錯誤：{errs}"
+                page.close()
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+    print("✓ 控制台匯入頁面：成功給連結與筆數、失敗照實說且不談報表")
 
 
 def test_control_page_modes_and_output_escaping():

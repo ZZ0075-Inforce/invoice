@@ -36,6 +36,11 @@ from . import operator_signal
 
 MONTH_RE = re.compile(r"^\d{4}-(?:0[1-9]|1[0-2])$")
 
+# 一個工作＝依序跑的幾道指令（多半只有一道）。**這是刻意放在這一層的**：
+# 「匯入完要重生報表」如果交給頁面在工作結束後再送一次請求，使用者關掉分頁
+# 就靜默留下舊報表——而使用者不會知道自己看到的是舊的。
+Steps = list[list[str]]
+
 
 class BadParams(ValueError):
     """參數不合格。訊息是人話，會原樣送回頁面顯示。"""
@@ -46,11 +51,11 @@ class Busy(RuntimeError):
     兩個 fetch 搶同一個登入 session 更沒有。"""
 
 
-def _no_params(argv: list[str], title: str) -> Callable[[dict], tuple[list[str], str]]:
-    def build(params: dict) -> tuple[list[str], str]:
+def _no_params(argv: list[str], title: str) -> Callable[[dict], tuple[Steps, str]]:
+    def build(params: dict) -> tuple[Steps, str]:
         if params:
             raise BadParams(f"「{title}」不吃參數")
-        return list(argv), title
+        return [list(argv)], title
     return build
 
 
@@ -61,12 +66,33 @@ def _month(params: dict, key: str, label: str) -> str:
     return value
 
 
-def _fetch(params: dict) -> tuple[list[str], str]:
+def _fetch(params: dict) -> tuple[Steps, str]:
     a = _month(params, "from", "起始月份")
     b = _month(params, "to", "結束月份")
     if a > b:
         raise BadParams(f"起始月份（{a}）不能晚於結束月份（{b}）")
-    return ["fetch", "--from", a, "--to", b], f"抓發票 {a} ～ {b}"
+    return [["fetch", "--from", a, "--to", b]], f"抓發票 {a} ～ {b}"
+
+
+def _import(params: dict) -> tuple[Steps, str]:
+    """匯入指定的 CSV，**接著重生報表**。
+
+    路徑沒有辦法像月份那樣驗形狀（任何字串都可能是合法路徑），所以這裡只擋
+    「會被誤讀成別的東西」的那幾種，檔案本身的合法性交給指令端講人話——那份
+    訊息已經寫好了，抄第二份只會讓兩邊漂掉（issue #22 的驗收條件也這麼要求）。
+    """
+    raw = str(params.get("path", "")).strip()
+    # 檔案總管的「複製檔案路徑」會連雙引號一起給，直接貼進來是常態
+    raw = raw.strip('"').strip("'").strip()
+    if not raw:
+        raise BadParams("要先指定 CSV 檔案的路徑")
+    if raw.startswith("-"):
+        # argparse 會把它當成旗標吃掉：`import --help` 印完說明以 0 收場，
+        # 看起來就像匯入成功了
+        raise BadParams("路徑不能以 - 開頭")
+    if "\n" in raw or "\r" in raw:
+        raise BadParams("路徑不能含換行——請只貼一個檔案的路徑")
+    return [["import", raw], ["export", "--no-open"]], f"匯入 {Path(raw).name}"
 
 
 # 控制台能啟動的工作白名單。**端點收到的是名稱與具名參數、不是 argv**——
@@ -79,11 +105,12 @@ def _fetch(params: dict) -> tuple[list[str], str]:
 #
 # login 單獨也給一顆：token 過期時 fetch 會回 401 並要你「重跑 login」
 # （CLAUDE.md「已知的坑」），控制台沒有這顆的話那句話就沒有出口。
-ALLOWED: dict[str, Callable[[dict], tuple[list[str], str]]] = {
+ALLOWED: dict[str, Callable[[dict], tuple[Steps, str]]] = {
     "export": _no_params(["export", "--no-open"], "重生報表"),
     "update": _no_params(["update", "--no-open"], "每月例行"),
     "login": _no_params(["login"], "登入"),
     "fetch": _fetch,
+    "import": _import,
 }
 
 # 輸出保留上限。工作再長也不該把 serve 的記憶體吃光；超過就丟最舊的，
@@ -117,11 +144,11 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 class Job:
     """一次執行。輸出由讀取執行緒寫入、由請求執行緒讀出，所以行緩衝要上鎖。"""
 
-    def __init__(self, job_id: int, name: str, args: list[str], title: str,
+    def __init__(self, job_id: int, name: str, steps: Steps, title: str,
                  done_file: Path) -> None:
         self.id = job_id
         self.name = name
-        self.args = args
+        self.steps = steps
         self.title = title
         self.done_file = done_file
         self.returncode: int | None = None
@@ -171,6 +198,13 @@ class Job:
         """
         with self._lock:
             self._proc = proc
+            return self._cancelled
+
+    @property
+    def cancelled(self) -> bool:
+        """中止按下了嗎。多段工作靠它在**兩段之間**收手——中止正好落在兩段
+        中間時沒有行程可殺，不問這一句的話下一段照樣會起來。"""
+        with self._lock:
             return self._cancelled
 
     def cancel(self) -> bool:
@@ -245,7 +279,7 @@ class Runner:
         if name not in ALLOWED:
             raise KeyError(name)
         # 先驗參數再搶位子：參數打錯不該把「有沒有工作在跑」的狀態動到
-        args, title = ALLOWED[name](dict(params or {}))
+        steps, title = ALLOWED[name](dict(params or {}))
         with self._lock:
             if self._job is not None and self._job.state == "running":
                 raise Busy(f"「{self._job.title}」還在跑，等它結束再開下一個。")
@@ -253,7 +287,7 @@ class Runner:
             # 訊號檔放暫存目錄而不是工作區：它是這次執行的內部狀態，不該
             # 出現在使用者的資料夾裡，也不該有機會被收進備份包
             workdir = Path(tempfile.mkdtemp(prefix="twcrawl-job-"))
-            job = Job(self._seq, name, args, title, workdir / "done")
+            job = Job(self._seq, name, steps, title, workdir / "done")
             self._job = job
         threading.Thread(target=self._run, args=(job, Path(cwd)),
                          daemon=True).start()
@@ -269,10 +303,26 @@ class Runner:
         #   （協定見 operator_signal）。
         env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1",
                    **{operator_signal.ENV_DONE_FILE: str(job.done_file)})
-        argv = [sys.executable, "-X", "utf8", "-m", "twcrawl", *job.args]
         # 這個函式**一定**要替工作收尾。少了 finally，讀管線時的任何例外都會
         # 讓 returncode 永遠留在 None：狀態卡在 running、Runner 從此永久 Busy、
         # 頁面的按鈕永久 disabled，只能重啟 serve 才救得回來。
+        rc = -1
+        try:
+            total = len(job.steps)
+            for i, step in enumerate(job.steps, 1):
+                if job.cancelled:      # 中止正好落在兩段之間：不要再起下一段
+                    break
+                if total > 1:
+                    job.add(f"=== {i}/{total} twcrawl {' '.join(step)} ===")
+                rc = self._run_step(job, cwd, env, step)
+                if rc != 0:
+                    break              # 前一段沒過，後面就別做了
+        finally:
+            job.finish(rc)
+            shutil.rmtree(job.done_file.parent, ignore_errors=True)
+
+    def _run_step(self, job: Job, cwd: Path, env: dict, args: list[str]) -> int:
+        argv = [sys.executable, "-X", "utf8", "-m", "twcrawl", *args]
         rc = -1
         try:
             proc = subprocess.Popen(
@@ -290,9 +340,7 @@ class Runner:
             )
         except OSError as exc:  # 直譯器不見、cwd 不存在……
             job.add(f"啟動失敗：{exc}")
-            job.finish(rc)
-            shutil.rmtree(job.done_file.parent, ignore_errors=True)
-            return
+            return rc
         try:
             if job.attach(proc):   # 中止比 Popen 早一步按下
                 _kill_tree(proc)
@@ -300,11 +348,8 @@ class Runner:
             for line in proc.stdout:
                 job.add(line.rstrip("\n"))
             proc.stdout.close()
-            rc = proc.wait()
+            return proc.wait()
         except Exception as exc:  # 管線讀壞、行程被外力砍掉……
             job.add(f"工作中斷：{exc}")
             _kill_tree(proc)      # 別留下沒人收的孤兒行程（含底下的瀏覽器）
-            rc = proc.wait()
-        finally:
-            job.finish(rc)
-            shutil.rmtree(job.done_file.parent, ignore_errors=True)
+            return proc.wait()
