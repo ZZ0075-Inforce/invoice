@@ -516,10 +516,12 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   沒有 INVOICE 狀態碼，公開網路也搜不到文件。改保守對照
   `export.INVOICE_STATUS_ZH`（只收實測可對應的 `INVOICE0003S`→開立；庫內
   431 張全部命中、54 張 CSV 舊來源無狀態），未收錄碼原樣進 payload 不吞
-  資訊。翻譯在匯出端做完（invoices[].status），查詢頁：非常態才在號碼旁
-  標（開立不佔列上版面）、展開明細一律顯示狀態行；惡意測試補「點開全部
-  發票列」讓狀態行與品項表的跳脫被實際渲染。不需重抓（inv_status 已入
-  庫）。測試 54/54
+  資訊。翻譯在匯出端做完（invoices[].status），「算不算常態」也是——
+  payload 帶 statusFlagged（_STATUS_NORMAL 單一定義），頁面只讀旗標不
+  解讀譯文（拿譯文比對的話，改譯名會讓 431 列靜默全長出徽章）。查詢頁：
+  非常態才在號碼旁標（開立不佔列上版面）、展開明細一律顯示狀態行；惡意
+  測試補「點開全部發票列」讓狀態行與品項表的跳脫被實際渲染；DOM 面測試
+  釘住三個顯示決策。不需重抓（inv_status 已入庫）。測試 54→55
 - ⬜ 緩辦（要做先問）：CSV 匯出（分類趨勢圖已做＝#11；地圖店家搜尋立案為 #15）
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive
