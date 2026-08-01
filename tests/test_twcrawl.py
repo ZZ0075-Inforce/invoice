@@ -432,6 +432,87 @@ def test_parse_csv_md_format():
     print("✓ CSV 解析：M/D 混合列型")
 
 
+def test_import_csv_counts_idempotence_and_guards():
+    """匯入是歷年資料唯一的入口，所以「進去幾筆」與「略過幾列」都要說實話。
+
+    冪等的斷言看的是**資料庫的列數**而不是回傳值：upsert 重跑會回同樣的筆數
+    （它報的是處理了幾筆，不是新增了幾筆），拿回傳值當冪等的證據會過得很開心
+    而完全漏掉重複列。壞檔那三種則是這條路最可能遇到的——一年跑不到一次的
+    指令，訊息不是人話等於沒有訊息。
+    """
+    from twcrawl import commands
+    from twcrawl.workspace import Workspace
+
+    csv_text = (
+        "載具自訂名稱,發票日期,發票號碼,發票金額,發票狀態,折讓,賣方統一編號,賣方名稱,"
+        "賣方地址,買方統編,消費明細_數量,消費明細_單價,消費明細_金額,消費明細_品名\n"
+        "手機條碼,2026/06/15,AB12345678,168,已開立,0,22555003,測試超商,,,2,35,70,御飯糰\n"
+        "手機條碼,2026/06/15,AB12345678,168,已開立,0,22555003,測試超商,,,1,98,98,拿鐵咖啡\n"
+        "手機條碼,2026/06/20,CD11112222,50,已開立,0,12345678,測試商行,,,1,50,50,礦泉水\n"
+        "合計,,,218,,,,,,,,,,\n"          # 頁尾列：沒有發票號碼，要被算進略過
+    )
+
+    with TemporaryDirectory() as td:
+        ws = Workspace(Path(td))
+        src = Path(td) / "下載" / "export.csv"   # 來源本來就在工作區外
+        src.parent.mkdir()
+        src.write_text(csv_text, encoding="utf-8-sig")
+
+        conn = db.connect(ws.db)
+        try:
+            res = commands.cmd_import(conn, ws, src)
+            assert (res["invoices"], res["items"]) == (2, 3), res
+            assert res["skipped"] == 1, f"頁尾列要被算進略過，實際：{res}"
+            assert res["kind"] == "header", res
+            text = commands.format_import(res)
+            assert "略過" in text, f"略過了列就一定要說：{text}"
+            assert "twcrawl export" in text, f"要提示下一步：{text}"
+
+            def counts():
+                return (
+                    conn.execute("select count(*) from invoices").fetchone()[0],
+                    conn.execute("select count(*) from invoice_items").fetchone()[0],
+                )
+
+            assert counts() == (2, 3), counts()
+            commands.cmd_import(conn, ws, src)       # 同一個檔案再跑一次
+            assert counts() == (2, 3), f"重跑不該長出重複列，實際：{counts()}"
+
+            # 壞檔三種：都要是人話，而不是 traceback，也不是「匯入完成 0 筆」
+            bad = Path(td) / "bad.csv"
+            bad.write_text("", encoding="utf-8")
+            junk = Path(td) / "junk.csv"
+            junk.write_text("這不是,發票匯出\n某某公司,兩欄\n", encoding="utf-8")
+            head_only = Path(td) / "head_only.csv"
+            head_only.write_text(csv_text.split("\n")[0] + "\n", encoding="utf-8-sig")
+            cases = [
+                (Path(td) / "沒有這個檔.csv", "找不到檔案"),
+                (bad, "空的"),
+                (junk, "認不得"),
+                (Path(td), "目錄"),
+                # 只匯出了表頭與「認不得格式」是兩件事，講錯會讓人去追錯方向
+                (head_only, "沒有可用的資料列"),
+            ]
+            for path, want in cases:
+                try:
+                    commands.cmd_import(conn, ws, path)
+                    raise AssertionError(f"{path.name} 應該被擋下來")
+                except SystemExit as e:
+                    msg = str(e)
+                    assert want in msg, f"訊息要講「{want}」，實際：{msg}"
+                    assert "→" in msg, f"人話訊息要給出路：{msg}"
+            # 認不得的時候不可以把讀到的內容印出來——第一列可能根本不是表頭，
+            # 而是真的消費紀錄（比照 db_stats 只印筆數的規矩）
+            try:
+                commands.cmd_import(conn, ws, junk)
+            except SystemExit as e:
+                assert "某某公司" not in str(e), \
+                    f"認不得的訊息不該回放檔案內容：{e}"
+        finally:
+            conn.close()   # Windows：開著的連線會擋住暫存目錄清理
+    print("✓ import：筆數與略過數說實話、重跑冪等、五種壞檔給人話且不回放內容")
+
+
 def test_netcapture_records_plaintext_xhr():
     """XHR 回應即使 content-type 是 text/plain 也要錄到；索引須隨錄隨寫。"""
     from twcrawl.netcapture import Capture

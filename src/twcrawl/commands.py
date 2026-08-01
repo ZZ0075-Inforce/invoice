@@ -127,6 +127,32 @@ def cmd_fetch(conn, ws: Workspace, date_from: str, date_to: str, *,
             with_details=with_details)
 
 
+def cmd_import(conn, ws: Workspace, path: Path | str) -> dict:
+    """匯入一個平台匯出的 CSV。歷年資料唯一的入口（issue #19）。
+
+    路徑是使用者指名的檔案，不是工作區推出來的——匯入的來源本來就在工作區
+    外（下載目錄、隨身碟、專案申請寄回來的檔案），所以這裡收絕對／相對路徑
+    都行，由 shell 的目前目錄決定。
+    """
+    return einvoice.import_csv(Path(path), conn)
+
+
+def format_import(res: dict) -> str:
+    kind = {"header": "含表頭的明細寬表", "md": "舊版 M/D 列型"}.get(
+        res["kind"], res["kind"])
+    out = [
+        "\n=== 匯入完成 ===",
+        f"  檔案：{res['file']}（格式：{kind}）",
+        f"  發票 {res['invoices']} 筆、明細 {res['items']} 列入庫",
+    ]
+    if res["skipped"]:
+        # 略過幾列一定要說。不說的話，欄位對不上的檔案會匯入成功卻只進一半
+        out.append(f"  ！{res['rows']} 列裡有 {res['skipped']} 列找不到發票號碼，"
+                   "已略過（頁尾或統計列的話屬正常）")
+    out.append("  → 接著跑 `twcrawl export` 重生報表就看得到。")
+    return "\n".join(out)
+
+
 def cmd_ingest(conn, ws: Workspace, *,
                capture_dir: Path | str | None = None) -> dict:
     root = Path(capture_dir) if capture_dir else ws.latest_capture()

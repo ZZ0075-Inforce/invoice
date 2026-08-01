@@ -55,6 +55,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ing = sub.add_parser("ingest", help="把擷取到的資料解析後寫入 SQLite")
     p_ing.add_argument("--dir", help="擷取目錄，預設為最新一次")
 
+    p_imp = sub.add_parser(
+        "import", help="匯入平台匯出的 CSV（歷年資料唯一入口，見 README）"
+    )
+    p_imp.add_argument("path", help="CSV 檔案路徑")
+
     p_hand = sub.add_parser(
         "handoff", help="產生可安全分享的擷取摘要（所有值代換成型別名稱）"
     )
@@ -169,6 +174,14 @@ def _dispatch(args: argparse.Namespace, ws: Workspace) -> int:
     if args.cmd == "ingest":
         with _db(ws.db) as conn:
             commands.cmd_ingest(conn, ws, capture_dir=args.dir)
+        return 0
+
+    if args.cmd == "import":
+        # 刻意不 require_db：匯入常常就是新工作區的第一個動作（換機、
+        # 拿到歷年檔案），這時候還沒有資料庫是正常的
+        with _db(ws.db) as conn:
+            res = commands.cmd_import(conn, ws, args.path)
+        print(commands.format_import(res))
         return 0
 
     if args.cmd == "handoff":

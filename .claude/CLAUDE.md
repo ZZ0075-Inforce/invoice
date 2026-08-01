@@ -43,6 +43,7 @@ twcrawl restore <包>                   # 還原到目前目錄＋當場驗筆�
 
 # 維護／除錯
 twcrawl capture                       # 人工操作、錄下回應（API 改版時用來重新確認形狀）
+twcrawl import <檔案>                  # 匯入平台匯出的 CSV（歷年資料唯一入口；冪等）
 twcrawl ingest                        # 重新解析最新擷取入庫（解析規則改了不用重抓）
 twcrawl handoff                       # 產生可分享的去值化摘要（值全部代換成型別）
 twcrawl probe <url>                   # 頁面結構偵察報告
@@ -299,7 +300,17 @@ src/twcrawl/
 ├── handoff.py    去值化摘要（URL query、POST 參數、JSON、CSV 全遮值；token 連「參數名」都遮；
 │                 索引從 capture_index 讀——以前對 fetch 產物會把檔名字根印在端點欄位）
 └── sites/
-    ├── einvoice.py        ALIASES 欄位別名（2026-07-27 已依實測校正）、CSV/JSON/明細解析、ingest
+    ├── einvoice.py        ALIASES 欄位別名（2026-07-27 已依實測校正）、CSV/JSON/明細解析、ingest。
+    │                      `import_csv`（#19）是歷年資料唯一入口，所以解析結果多一份
+    │                      **會講話的形狀** `parse_csv_report`→`CsvParse`（kind／資料
+    │                      列數／欄數／略過列數）：ingest 掃整個目錄、逐檔判讀沒意義，
+    │                      import 相反——使用者指名了這個檔案，「認不得」與「略過幾列」
+    │                      不講就是靜默丟棄，而這條路一年跑不到一次，等看報表少一整年
+    │                      才發現太遲。認不得時**不回放檔案內容**（第一列可能不是表頭
+    │                      而是消費紀錄，比照 db_stats 只印筆數）。「只有表頭」與「認不
+    │                      得格式」分成兩句話，講錯會讓人去追錯方向。
+    │                      `merge_invoices` 出一份給兩條路用——CSV 寬表一列一品項，
+    │                      同一張發票天生就有多列
     ├── einvoice_fetch.py  fetch 逐月重放 API（呼叫走頁內 fetch()，token 即取即用不落地；
     │                      _Sink 寫索引帶**真實 url 與 status**，回傳鍵是
     │                      fetched_invoices／fetched_details——以前叫 invoices，
@@ -699,7 +710,17 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   runner 沒卡死（隨後 export 496 張正常跑完）；丟棄用工作區裡按下「我已登入」
   → 子行程接著保存 session、收在 done；關掉視窗 → 8765 沒有殘留 listener。
   測試 61→64（人工交接兩端＋真行程樹的中止＋端點的參數/409）
-- ⬜ 「操作更順手」批次剩餘：#19 import（無阻塞）、#22 控制台匯入（等 #19）
+- ✅ `twcrawl import`（2026-08-02，issue #19）：歷年資料唯一入口——平台的查詢
+  區間下限擋死回溯，`fetch` 抓不到的月份只能靠手上已有的檔案補。零件本來就在
+  （CSV 解析＋編碼後備、冪等 upsert），這張票是把它們接成指令**並讓它會講話**：
+  解析多一份 `CsvParse`（kind／資料列數／欄數／略過列數），略過幾列一定印出來
+  ——欄位對不上時「匯入成功卻只進一半」是這條路最該防的失效，而一年跑不到一次
+  的指令，等看報表少一整年才發現就太遲。認不得格式時**不回放檔案內容**（第一列
+  可能不是表頭而是消費紀錄）；「只有表頭」與「認不得格式」分成兩句話。
+  `merge_invoices` 從 ingest 抽出來共用（CSV 寬表一列一品項，同一張發票天生
+  多列）。測試 64→65（筆數／略過數／重跑冪等看資料庫列數而非回傳值／五種壞檔
+  給人話且不回放內容）
+- ⬜ 「操作更順手」批次剩餘：#22 控制台匯入（#19 已完成，阻塞解除）
 - ⬜ 緩辦（要做先問）：CSV 匯出（分類趨勢圖已做＝#11；地圖店家搜尋立案為 #15）
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

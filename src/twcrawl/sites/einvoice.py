@@ -15,7 +15,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator, NamedTuple
 
 from playwright.sync_api import BrowserContext
 
@@ -220,8 +220,30 @@ def _norm_date(v: Any) -> str | None:
 
 # ------------------------------------------------------------- 解析 (CSV) --
 
+class CsvParse(NamedTuple):
+    """一次 CSV 解析的完整結果。
+
+    `parse_csv_file` 只回 (invoices, items)——`ingest` 掃整個擷取目錄，逐檔
+    判讀沒有意義。`import` 相反：使用者指名了這一個檔案，「認不得」與「略過
+    了幾列」都必須講出來，靜默丟棄正是這條路最該防的失效（issue #19）。
+    """
+
+    invoices: list[dict]
+    items: list[dict]
+    kind: str          # "header"（新版寬表）／"md"（舊版列型）／"unknown"
+    data_rows: int     # 資料列數：扣掉空行，也扣掉表頭那一列
+    columns: int       # 第一列的欄數（0＝檔案裡一列都沒有）
+    skipped: int       # 認不出發票號碼而略過的列
+
+
 def parse_csv_file(path: Path) -> tuple[list[dict], list[dict]]:
-    """解析平台匯出的載具發票 CSV。
+    """解析平台匯出的載具發票 CSV（只要解析結果的呼叫端用這個）。"""
+    r = parse_csv_report(path)
+    return r.invoices, r.items
+
+
+def parse_csv_report(path: Path) -> CsvParse:
+    """解析平台匯出的載具發票 CSV，連同「認不得／略過」一起回報。
 
     2026-07 實測的新版匯出（btc502w/downloadInvoiceDetailCSV）是含表頭的
     寬表：一列一品項，發票欄位重複、品項欄位掛 `消費明細_` 前綴。
@@ -231,7 +253,7 @@ def parse_csv_file(path: Path) -> tuple[list[dict], list[dict]]:
     text = _read_text(path)
     rows = [r for r in csv.reader(io.StringIO(text)) if r and any(c.strip() for c in r)]
     if not rows:
-        return [], []
+        return CsvParse([], [], "unknown", 0, 0, 0)
 
     header = [c.strip() for c in rows[0]]
     mapped = [_LOOKUP.get(_norm_key(h)) for h in header]
@@ -239,22 +261,27 @@ def parse_csv_file(path: Path) -> tuple[list[dict], list[dict]]:
         INV_NUM_RE.match(c.upper()) for c in header
     )
     if is_header:
-        return _parse_csv_with_header(path, header, rows[1:])
-    return _parse_csv_md(path, rows)
+        inv, items, skipped = _parse_csv_with_header(path, header, rows[1:])
+        return CsvParse(inv, items, "header", len(rows) - 1, len(header), skipped)
+    inv, items, skipped = _parse_csv_md(path, rows)
+    kind = "md" if inv or items else "unknown"
+    return CsvParse(inv, items, kind, len(rows), len(header), skipped)
 
 
 def _parse_csv_with_header(
     path: Path, header: list[str], body: list[list[str]]
-) -> tuple[list[dict], list[dict]]:
+) -> tuple[list[dict], list[dict], int]:
     invoices: list[dict] = []
     items: list[dict] = []
     seq: dict[str, int] = {}
+    skipped = 0
 
     for row in body:
         rec = {header[i]: c.strip() for i, c in enumerate(row) if i < len(header)}
         m = _map_record(rec, _LOOKUP)
         inv_num = str(m.get("inv_num") or "").strip().upper()
         if not INV_NUM_RE.match(inv_num):
+            skipped += 1
             continue
         raw = json.dumps(row, ensure_ascii=False)
         invoices.append(
@@ -287,13 +314,16 @@ def _parse_csv_with_header(
                     "raw": raw,
                 }
             )
-    return invoices, items
+    return invoices, items, skipped
 
 
-def _parse_csv_md(path: Path, rows: list[list[str]]) -> tuple[list[dict], list[dict]]:
+def _parse_csv_md(
+    path: Path, rows: list[list[str]]
+) -> tuple[list[dict], list[dict], int]:
     invoices: list[dict] = []
     items: list[dict] = []
     seq: dict[str, int] = {}
+    skipped = 0
 
     for row in rows:
         row = [c.strip() for c in row if c is not None]
@@ -302,6 +332,7 @@ def _parse_csv_md(path: Path, rows: list[list[str]]) -> tuple[list[dict], list[d
         tag = row[0].upper()
         pos = next((i for i, c in enumerate(row) if INV_NUM_RE.match(c.upper())), None)
         if pos is None:
+            skipped += 1
             continue
         inv_num = row[pos].upper()
 
@@ -346,7 +377,10 @@ def _parse_csv_md(path: Path, rows: list[list[str]]) -> tuple[list[dict], list[d
                     "raw": json.dumps(row, ensure_ascii=False),
                 }
             )
-    return invoices, items
+        else:
+            # M/D 以外的標籤（頁尾、統計列……）——沒有靜默的餘地，算進略過數
+            skipped += 1
+    return invoices, items, skipped
 
 
 def _is_text(c: str) -> bool:
@@ -435,6 +469,68 @@ def _db_file(conn) -> str:
     return "?"
 
 
+def merge_invoices(rows: Iterable[dict]) -> list[dict]:
+    """同一張發票的多列合併成一筆。
+
+    兩條路都會拿到重複的發票列：CSV 寬表是一列一品項（三個品項就有三列
+    同樣的發票），而一次擷取裡同一張發票可能同時來自 CSV 與 JSON，兩邊
+    各有對方缺的欄位。所以是**合併而非覆蓋**——空值不蓋掉已有的值。
+    """
+    merged: dict[str, dict] = {}
+    for r in rows:
+        cur = merged.setdefault(r["inv_num"], r)
+        if cur is not r:
+            for k, v in r.items():
+                if cur.get(k) in (None, "") and v not in (None, ""):
+                    cur[k] = v
+    return list(merged.values())
+
+
+def import_csv(path: Path, conn) -> dict:
+    """匯入平台匯出的 CSV（issue #19）。
+
+    平台的查詢區間有下限，早於下限連表頭都拿不到（CLAUDE.md「站台實測
+    事實」），所以**這是歷年資料唯一的入口**。也因此「認不得格式」與「略過
+    了幾列」一定要講出來：這條路一年跑不到一次，靜默丟棄的話，使用者會以為
+    資料已經進去了，而真相要等到看報表少了一整年才會發現。
+
+    只回筆數，不回也不印金額與店家名（那是消費紀錄）。
+    """
+    if not path.exists():
+        raise SystemExit(f"找不到檔案：{path}\n  → 確認路徑，或把檔案拖進終端機取得完整路徑。")
+    if path.is_dir():
+        raise SystemExit(f"這是一個目錄，不是 CSV 檔案：{path}\n  → 指名要匯入的那個檔案。")
+
+    rep = parse_csv_report(path)
+    if rep.columns == 0:
+        raise SystemExit(f"這個檔案是空的（{path.name}）\n  → 確認匯出時真的有選到資料。")
+    if not rep.invoices and rep.kind == "header":
+        # 認得表頭卻一筆都沒解出來：這是「只匯出了表頭」，與「認不得格式」
+        # 是兩件事，講錯會讓人跑去追格式問題
+        raise SystemExit(
+            f"這個 CSV 有認得的表頭，但沒有可用的資料列（{path.name}）\n"
+            f"  {rep.data_rows} 個資料列裡沒有一列找得到發票號碼\n"
+            "  → 確認匯出時真的有選到資料。"
+        )
+    if not rep.invoices:
+        # 刻意不把讀到的內容印出來——認不得的時候第一列可能根本不是表頭而是
+        # 真的消費紀錄，那不該進終端機（比照 db_stats 只印筆數的規矩）
+        raise SystemExit(
+            f"認不得這個 CSV 的格式（{path.name}）\n"
+            f"  讀到 {rep.data_rows} 列、每列 {rep.columns} 欄，"
+            "但沒有一列找得到發票號碼（AA12345678 這種形狀）\n"
+            "  → 需要的是平台「載具發票明細」匯出的 CSV（含表頭那種），"
+            "或舊版 M/D 列型\n"
+            "  → 想讓工具支援新格式：提供第一列的欄位名即可（不要任何值）。"
+        )
+
+    invoices = merge_invoices(rep.invoices)
+    n_inv = db.upsert_invoices(conn, invoices)
+    n_item = db.upsert_items(conn, rep.items)
+    return {"file": str(path), "kind": rep.kind, "rows": rep.data_rows,
+            "skipped": rep.skipped, "invoices": n_inv, "items": n_item}
+
+
 def ingest(capture_dir: Path, conn) -> dict[str, int]:
     invoices: list[dict] = []
     items: list[dict] = []
@@ -462,15 +558,7 @@ def ingest(capture_dir: Path, conn) -> dict[str, int]:
         invoices.extend(i)
         items.extend(d)
 
-    # 同一張發票可能同時來自 CSV 與 JSON（各有對方缺的欄位），合併而非覆蓋
-    dedup_inv: dict[str, dict] = {}
-    for r in invoices:
-        cur = dedup_inv.setdefault(r["inv_num"], r)
-        if cur is not r:
-            for k, v in r.items():
-                if cur.get(k) in (None, "") and v not in (None, ""):
-                    cur[k] = v
-    n_inv = db.upsert_invoices(conn, dedup_inv.values())
+    n_inv = db.upsert_invoices(conn, merge_invoices(invoices))
     n_item = db.upsert_items(conn, items)
     print(f"\n匯入完成：發票 {n_inv} 筆、明細 {n_item} 列 → {_db_file(conn)}")
     if not n_inv:
