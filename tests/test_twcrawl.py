@@ -2871,6 +2871,81 @@ def test_fixed_spend_detection():
     print("✓ 固定支出偵測：月訂閱、已停判定、高頻排除（export 共用、月報磚同源）")
 
 
+def test_price_tracking_detection():
+    """同店價格追蹤（issue #23）：三道清理、漲價判定的邊界、久未購買旗標。"""
+    from twcrawl.export import _detect_price
+
+    def inv(num, date, seller, items):
+        """items 是 (品名, 數量, 單價, 金額) 的序列，欄位名同 payload。"""
+        return {"num": num, "date": date, "seller": seller,
+                "items": [{"desc": d, "qty": q, "price": p, "amount": a}
+                          for d, q, p, a in items]}
+
+    rows = [
+        # 漲價：先前中位數 100 → 最近 110
+        inv("N1", "2026-01-10", "甲店", [("常買A", 1, 100.0, 100.0)]),
+        inv("N2", "2026-02-10", "甲店", [("常買A", 1, 100.0, 100.0)]),
+        inv("N3", "2026-03-10", "甲店", [("常買A", 1, 100.0, 100.0)]),
+        inv("N4", "2026-06-10", "甲店", [("常買A", 1, 110.0, 110.0)]),
+        # 恰好 +5%：門檻是嚴格大於，這一列不該上榜
+        inv("N5", "2026-01-11", "乙店", [("剛好B", 1, 100.0, 100.0)]),
+        inv("N6", "2026-06-11", "乙店", [("剛好B", 1, 105.0, 105.0)]),
+        # 剛好超過門檻
+        inv("N7", "2026-01-12", "丙店", [("超過C", 1, 100.0, 100.0)]),
+        inv("N8", "2026-06-12", "丙店", [("超過C", 1, 106.0, 106.0)]),
+        # 非正價：贈品與折讓兩列被丟掉，只剩一個價格點 → 整個配對消失
+        inv("N9", "2026-01-13", "丁店", [("贈品D", 1, 0.0, 0.0)]),
+        inv("N10", "2026-02-13", "丁店", [("贈品D", 1, -50.0, -50.0)]),
+        inv("N11", "2026-03-13", "丁店", [("贈品D", 1, 100.0, 100.0)]),
+        # 同一天同店同品名兩個價格 → 丟掉那一天（不是同一個東西）
+        inv("N12", "2026-01-14", "戊店", [("同日E", 1, 100.0, 100.0)]),
+        inv("N13", "2026-02-14", "戊店", [("同日E", 1, 100.0, 100.0),
+                                          ("同日E", 1, 130.0, 130.0)]),
+        inv("N14", "2026-03-14", "戊店", [("同日E", 1, 100.0, 100.0)]),
+        # 散布過大：會通過漲幅門檻，但高低比 10 倍＝同名不同品，擋在清單外
+        inv("N15", "2026-01-15", "己店", [("散布F", 1, 100.0, 100.0)]),
+        inv("N16", "2026-02-15", "己店", [("散布F", 1, 100.0, 100.0)]),
+        inv("N17", "2026-06-15", "己店", [("散布F", 1, 1000.0, 1000.0)]),
+        # 沒有單價 → 以 金額÷數量 回推（100 → 111）。數量不是 1，正好證明
+        # 不能拿 amount 當價格：333 比 200 是 +66%，單價其實只漲 11%
+        inv("N18", "2026-01-16", "庚店", [("回推G", 2, None, 200.0)]),
+        inv("N19", "2026-06-16", "庚店", [("回推G", 3, None, 333.0)]),
+        # 久未購買：漲了，但最後一次購買距庫內最新發票 119 天
+        inv("N20", "2026-01-17", "辛店", [("久未H", 1, 100.0, 100.0)]),
+        inv("N21", "2026-02-17", "辛店", [("久未H", 1, 120.0, 120.0)]),
+    ]
+    res = _detect_price(rows)
+    pairs = {p["desc"]: p for p in res["pairs"]}
+    st = res["stats"]
+
+    risen = [p["desc"] for p in res["pairs"] if p["risen"]]
+    assert risen == ["久未H", "回推G", "常買A", "超過C"], \
+        f"漲價清單內容或排序不對（應依漲幅由大到小）：{risen}"
+    assert not pairs["剛好B"]["risen"], "恰好 +5% 不算漲——門檻是嚴格大於"
+    assert pairs["回推G"]["latest"] == 111.0, \
+        "沒有單價時要用 金額÷數量 回推，不能拿 amount 當價格"
+
+    assert "贈品D" not in pairs, "非正價的列丟掉後只剩一個價格點，配對不該成立"
+    assert st["rowsDropped"] == 2, f"贈品與折讓各一列要被算進去：{st}"
+    assert pairs["同日E"]["n"] == 2 and st["daysDropped"] == 1, \
+        f"同一天同品名不同價 → 丟該日並記下來：{st}"
+
+    f = pairs["散布F"]
+    assert not f["risen"] and f["spreadFlagged"] and f["spread"] == 10.0, f
+    assert st["spreadExcluded"] == 1, \
+        f"被高低比擋下來的要點名，不能靜默消失：{st}"
+    assert "散布F" in pairs, "擋的是漲價清單，全表仍要查得到"
+
+    h = pairs["久未H"]
+    assert h["stale"] and h["daysSince"] == 119, h
+    assert not pairs["常買A"]["stale"], "近期還在買的不該標久未購買"
+    assert st["pairs"] == len(res["pairs"]) == 7, st
+    # 價格點帶發票號碼：查詢頁的「點日期看那張發票」靠它
+    assert [pt["num"] for pt in pairs["常買A"]["points"]] == \
+        ["N1", "N2", "N3", "N4"], pairs["常買A"]["points"]
+    print("✓ 價格追蹤偵測：三道清理各自留數字、+5% 邊界、回推單價、久未購買")
+
+
 # ------------------------------------------------------------- 對獎 --
 
 # 擬真 invoice.etax.nat.gov.tw 結構：導覽選單帶別期字樣（不可信）、
@@ -3208,6 +3283,35 @@ def a_payload(**overrides) -> dict:
         ],
         "fixedRule": {"minCount": 3, "tolAbs": 15, "tolPct": 5,
                       "minDays": 25, "maxDays": 400, "staleFactor": 1.6},
+        # 價格追蹤（issue #23）：與上面的發票一致——月租費 599×3（3 個價格點，
+        # 展開會畫折線）、珍珠鮮奶茶 60×2（兩點不畫圖）。兩個都持平，所以
+        # golden 拍到的是「沒有漲價」那條路；漲價／散布過大／久未購買三種
+        # 樣態由 test_query_price_view 以 override 各拍一次。
+        "price": {
+            "pairs": [
+                {"seller": "測試電信", "desc": "月租費", "n": 3,
+                 "points": [{"date": "2026-03-05", "price": 599.0, "num": "AA1"},
+                            {"date": "2026-04-05", "price": 599.0, "num": "AA3"},
+                            {"date": "2026-05-05", "price": 599.0, "num": "AA5"}],
+                 "last": "2026-05-05",
+                 "min": 599.0, "max": 599.0, "spread": 1.0,
+                 "spreadFlagged": False, "base": 599.0, "latest": 599.0,
+                 "pct": 0.0, "risen": False, "spanDays": 61,
+                 "daysSince": 31, "stale": False},
+                {"seller": "珍奶測試店", "desc": "珍珠鮮奶茶", "n": 2,
+                 "points": [{"date": "2026-04-18", "price": 60.0, "num": "AA4"},
+                            {"date": "2026-06-05", "price": 60.0, "num": "AA9"}],
+                 "last": "2026-06-05",
+                 "min": 60.0, "max": 60.0, "spread": 1.0,
+                 "spreadFlagged": False, "base": 60.0, "latest": 60.0,
+                 "pct": 0.0, "risen": False, "spanDays": 48,
+                 "daysSince": 0, "stale": False},
+            ],
+            "stats": {"pairs": 2, "risen": 0, "spreadExcluded": 0,
+                      "rowsDropped": 0, "daysDropped": 0},
+        },
+        "priceRule": {"minPoints": 2, "risePct": 5, "spreadCap": 3,
+                      "staleDays": 90},
         "months": months,
         "categories": [
             {"name": "電信", "total": 1797.0, "count": 3,
@@ -3488,6 +3592,7 @@ def test_pages_render_and_match_golden():
         ("dashboard", "dashboard.html", ""),
         ("query", "query.html", ""),
         ("query-fixed", "query.html", "?view=fixed"),
+        ("query-price", "query.html", "?view=price"),
         ("query-cat", "query.html", "?cat=" + quote("手搖飲")),
         ("fda", "fda.html", "?src=csm_news"),
         ("year", "year.html", ""),
@@ -3517,7 +3622,16 @@ def test_pages_survive_hostile_and_edge_payloads():
     hostile = _replace_strings(
         a_payload(), {"珍奶測試店": "珍奶" + xss, "手搖飲": "手搖" + xss,
                       "其他綜合零售": "零售" + xss, "六獎": "六獎" + xss,
-                      "INVOICE0099X": "狀態" + xss})
+                      "INVOICE0099X": "狀態" + xss,
+                      # 品名：明細表與價格追蹤都直接印它
+                      "珍珠鮮奶茶": "珍珠" + xss})
+
+    # 查詢頁預設是發票清單，品名與店家名在別的視圖才進 DOM——不各走一趟的話，
+    # 新視圖的跳脫等於沒驗到（而且會一直看起來是綠的）
+    views = [(p, "") for p in PAGE_ROOTS] + [
+        ("query.html", "?view=price"), ("query.html", "?view=fixed"),
+        ("query.html", "?view=seller"),
+    ]
 
     lot = a_payload()["lottery"]
     edges = [
@@ -3540,9 +3654,9 @@ def test_pages_survive_hostile_and_edge_payloads():
             _stub_tiles(ctx)
 
             out = _stage_pages(ws, hostile)
-            for page_name in PAGE_ROOTS:
-                page, errs = _open(ctx, out, page_name)
-                assert not errs, f"{page_name} 吃到惡意字串就出錯：{errs}"
+            for page_name, query in views:
+                page, errs = _open(ctx, out, page_name, query)
+                assert not errs, f"{page_name}{query} 吃到惡意字串就出錯：{errs}"
                 # 儀表板多數跳脫點在 tooltip、查詢頁的狀態行與品項表在展開
                 # 列——都要派事件才會渲染
                 page.evaluate("""() => {
@@ -3562,8 +3676,8 @@ def test_pages_survive_hostile_and_edge_payloads():
                 n = page.evaluate(
                     "document.querySelectorAll('twcrawl-xss').length")
                 assert n == 0, (
-                    f"{page_name} 把店家／分類名當 HTML 執行了（{n} 個節點）"
-                    "——payload 字串進 innerHTML 前一律要經 esc")
+                    f"{page_name}{query} 把店家／品名／分類名當 HTML 執行了"
+                    f"（{n} 個節點）——payload 字串進 innerHTML 前一律要經 esc")
                 page.close()
 
             for label, payload in edges:
@@ -3772,6 +3886,115 @@ def test_query_status_display():
     print("✓ 查詢頁狀態顯示：開立不標、未收錄碼原樣標、展開有中文狀態行")
 
 
+def test_query_price_view():
+    """價格追蹤視圖（issue #23）：漲價清單、排除說明、n≥3 才畫圖、全表搜尋。
+
+    fixture 直接餵給 `_detect_price` 產生 payload——手抄一份衍生欄位的話，
+    頁面會與偵測端各說各話，而那正是這個功能最容易漂的接縫。
+    """
+    from twcrawl.export import _detect_price
+    from twcrawl.workspace import Workspace
+
+    def inv(num, date, seller, desc, price):
+        return {"num": num, "date": date, "seller": seller,
+                "items": [{"desc": desc, "qty": 1, "price": price,
+                           "amount": price}]}
+
+    rows = [
+        # 四個價格點＋漲價（+16.7%）→ 展開要畫折線
+        inv("P1", "2026-01-05", "測試超市", "雞蛋", 60.0),
+        inv("P2", "2026-02-05", "測試超市", "雞蛋", 60.0),
+        inv("P3", "2026-03-05", "測試超市", "雞蛋", 62.0),
+        inv("P4", "2026-06-05", "測試超市", "雞蛋", 70.0),
+        # 兩個價格點＋漲價（+10%）→ 不畫折線
+        inv("P5", "2026-04-01", "珍奶測試店", "珍珠鮮奶茶", 60.0),
+        inv("P6", "2026-06-01", "珍奶測試店", "珍珠鮮奶茶", 66.0),
+        # 漲最多（+25%）但已經 123 天沒買
+        inv("P7", "2026-01-02", "測試早餐", "蛋餅", 40.0),
+        inv("P8", "2026-02-02", "測試早餐", "蛋餅", 50.0),
+        # 高低比 15 倍：擋在漲價清單外，全表仍看得到
+        inv("P9", "2026-01-03", "測試量販", "文具", 20.0),
+        inv("P10", "2026-02-03", "測試量販", "文具", 20.0),
+        inv("P11", "2026-06-03", "測試量販", "文具", 300.0),
+    ]
+    price = _detect_price(rows)
+    assert price["stats"] == {"pairs": 4, "risen": 3, "spreadExcluded": 1,
+                              "rowsDropped": 0, "daysDropped": 0}, price["stats"]
+
+    js = """(step) => {
+      const q = s => document.querySelectorAll(s);
+      const txt = e => (e ? e.textContent : "");
+      if (step === "counts") return {
+        risen: q("#prisen table tr.inv").length,
+        all: q("#pall table tr.inv").length,
+        tiles: [...q(".tile .value")].map(txt),
+        note: txt(document.querySelector("#prisen .note")),
+        firstRow: txt(q("#prisen table tr.inv")[0]),
+        spreadRow: txt(q("#pall table tr.inv")[3]),
+      };
+      if (step === "expand") {
+        const out = [];
+        for (const i of [0, 1]) {          // 0＝蛋餅 n=2、1＝雞蛋 n=4
+          const tr = q("#prisen table tr.inv")[i];
+          tr.click();
+          const r = tr.nextElementSibling;
+          out.push({ svg: r.querySelectorAll("svg").length,
+                     points: r.querySelectorAll("table tr").length - 1,
+                     links: r.querySelectorAll("button.pinv").length });
+          tr.click();                      // 收回去，不影響下一步
+        }
+        return out;
+      }
+      if (step === "search") {
+        const pq = document.getElementById("pq");
+        pq.value = "文具";
+        pq.dispatchEvent(new Event("input", { bubbles: true }));
+        return q("#pall table tr.inv").length;
+      }
+      if (step === "toInvoice") {          // 點價格點的發票號碼 → 發票清單
+        const tr = q("#prisen table tr.inv")[1];
+        tr.click();
+        const btn = tr.nextElementSibling.querySelector("button.pinv");
+        const num = btn.textContent;
+        btn.click();
+        return { view: txt(document.querySelector("button.chip.on")),
+                 q: (document.getElementById("q") || {}).value, num };
+      }
+    }"""
+    with TemporaryDirectory() as td:
+        out = _stage_pages(Workspace(Path(td)), a_payload(price=price))
+        with browser_context(session_file=None, headed=False) as ctx:
+            page, errs = _open(ctx, out, "query.html", "?view=price")
+            assert not errs, f"價格追蹤視圖：{errs}"
+
+            c = page.evaluate(js, "counts")
+            assert c["risen"] == 3, f"漲價清單應有 3 列，實得 {c['risen']}"
+            assert c["all"] == 4, f"全表應有 4 列，實得 {c['all']}"
+            assert c["tiles"] == ["4 項", "3 項", "1 項"], c["tiles"]
+            assert "已排除 1 項" in c["note"] and "同名不同品" in c["note"], (
+                f"被高低比擋下的要在清單旁點名與說明理由，實得 {c['note']!r}")
+            assert "蛋餅" in c["firstRow"] and "+25%" in c["firstRow"], (
+                f"漲幅最大的要排第一，實得 {c['firstRow']!r}")
+            assert "天沒買了" in c["firstRow"], (
+                f"久未購買要標記而不是濾除，實得 {c['firstRow']!r}")
+            assert "散布 15 倍" in c["spreadRow"], (
+                f"散布過大的仍要在全表且說明狀態，實得 {c['spreadRow']!r}")
+
+            two_pt, four_pt = page.evaluate(js, "expand")
+            assert two_pt == {"svg": 0, "points": 2, "links": 2}, (
+                f"兩個價格點不該畫折線（一條直線＝假裝有趨勢），實得 {two_pt}")
+            assert four_pt == {"svg": 1, "points": 4, "links": 4}, (
+                f"四個價格點要畫折線，實得 {four_pt}")
+
+            assert page.evaluate(js, "search") == 1, "全表搜尋應剩「文具」一列"
+
+            j = page.evaluate(js, "toInvoice")
+            assert j["view"] == "發票清單" and j["q"] == j["num"], (
+                f"點價格點的發票號碼要跳到發票清單並以號碼篩選，實得 {j}")
+            page.close()
+    print("✓ 價格追蹤視圖：清單/排除說明/n≥3 才畫圖/全表搜尋/點發票號碼跳清單")
+
+
 def test_map_seller_search():
     """地圖店家搜尋（issue #15）：輸入即過濾圓點、與圖例/時間取交集、
     清空恢復。fixture 兩個有座標的店家（超市、珍奶）。"""
@@ -3878,6 +4101,11 @@ def test_payload_contract():
             ])
             db.upsert_items(conn, [
                 an_item("AA2", 1, "雞蛋", 250.0, quantity=1, unit_price=250.0),
+                # 同店同品名 ×3 → price.pairs 非空。少了這幾列，price 的
+                # 子形狀（pairs[].*）會因為 real 端是空清單而整組漏比
+                an_item("AA1", 1, "月租費", 599.0, quantity=1, unit_price=599.0),
+                an_item("AA3", 1, "月租費", 599.0, quantity=1, unit_price=599.0),
+                an_item("AA5", 1, "月租費", 599.0, quantity=1, unit_price=599.0),
             ])
             db.upsert_lottery_draws(conn, [
                 {"period": "11503", "special": "11223344", "grand": "55667788",

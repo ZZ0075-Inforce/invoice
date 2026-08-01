@@ -65,6 +65,8 @@
 
   .ok   { color: var(--up-good); }
   .off  { color: var(--muted); }
+  /* 價格時間線：svg 的共用規則是 width:100%，放進展開列會撐滿整頁 */
+  .pchart { max-width: 620px; margin: 4px 0 10px; }
   svg { display: block; width: 100%; height: auto; }
   svg text { font-family: inherit; }
 </style>
@@ -171,7 +173,8 @@ TW.page({
   hd.append(ui.themeButton());
   app.append(hd);
 
-  const VIEWS = [["list", "發票清單"], ["seller", "店家查詢"], ["fixed", "固定支出"]];
+  const VIEWS = [["list", "發票清單"], ["seller", "店家查詢"],
+                 ["fixed", "固定支出"], ["price", "價格追蹤"]];
   const chips = el("div", "chips");
   for (const [key, label] of VIEWS) {
     const b = el("button", "chip", label);
@@ -699,6 +702,222 @@ TW.page({
     body.append(card);
   }
 
+  // ---- 價格追蹤視圖 -----------------------------------------------------
+  // 配對、三道清理與漲價判定全在 export.py 的 _detect_price，這裡只排版；
+  // 門檻數字由 payload 帶過來（同 fixedRule），改了門檻文案自動跟著改。
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const CHART_MIN_POINTS = 3;   // 兩點的折線是一條直線，畫出來只是假裝有趨勢
+  const pmoney = v => v == null ? "—"
+    : (Math.round(v * 100) / 100).toLocaleString("zh-TW");
+
+  function priceLine(pts) {
+    const W = 900, H = 150, mT = 14, mB = 26, mL = 56, mR = 14;
+    const iw = W - mL - mR, ih = H - mT - mB;
+    const mk = (tag, attrs) => {
+      const e = document.createElementNS(SVGNS, tag);
+      for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+      return e;
+    };
+    const svg = mk("svg", { viewBox: `0 0 ${W} ${H}` });
+    const vals = pts.map(p => p.price);
+    const lo = Math.min(...vals), hi = Math.max(...vals);
+    // 一格一個品項，y 刻度各自獨立（同分類趨勢圖的理由）；全平的序列也要
+    // 有高度可畫，否則 (v-y0)/(y1-y0) 會是 0/0
+    const pad = (hi - lo) || Math.max(1, hi * 0.08);
+    const y0 = lo - pad * 0.25, y1 = hi + pad * 0.25;
+    const x = i => mL + (pts.length > 1 ? iw * i / (pts.length - 1) : iw / 2);
+    const y = v => mT + ih - (v - y0) / (y1 - y0) * ih;
+    for (const v of (hi === lo ? [hi] : [lo, hi])) {
+      svg.append(mk("line", { x1: mL, x2: W - mR, y1: y(v), y2: y(v),
+        stroke: css("--grid"), "stroke-width": 1 }));
+      const t = mk("text", { x: mL - 8, y: y(v) + 4, "text-anchor": "end",
+        "font-size": 11, fill: css("--muted") });
+      t.textContent = pmoney(v);
+      svg.append(t);
+    }
+    svg.append(mk("polyline", {
+      points: pts.map((p, i) => `${x(i)},${y(p.price)}`).join(" "),
+      fill: "none", stroke: css("--s1"), "stroke-width": 2 }));
+    pts.forEach((p, i) => {
+      const c = mk("circle", { cx: x(i), cy: y(p.price), r: 3.5,
+        fill: css("--s1") });
+      const ti = document.createElementNS(SVGNS, "title");
+      ti.textContent = `${p.date}　${nt(p.price)}`;   // textContent：品名以外一律不進標記
+      c.append(ti);
+      svg.append(c);
+    });
+    for (const [i, anchor] of [[0, "start"], [pts.length - 1, "end"]]) {
+      const t = mk("text", { x: x(i), y: H - 7, "text-anchor": anchor,
+        "font-size": 11, fill: css("--muted") });
+      t.textContent = pts[i].date.slice(5);
+      svg.append(t);
+    }
+    return svg;
+  }
+
+  function pointsTable(p) {
+    return "<table><tr><th>日期</th><th class=\"num\">單價</th>" +
+      "<th>發票號碼</th></tr>" +
+      p.points.map((pt, i) => {
+        const prev = i ? p.points[i - 1].price : null;
+        const mark = prev == null || pt.price === prev ? ""
+          : pt.price > prev ? " ↑" : " ↓";
+        return `<tr><td>${pt.date}</td>` +
+          `<td class="num">${pmoney(pt.price)}${mark}</td><td>` +
+          (pt.num
+            ? `<button class="linkish pinv" data-n="${esc(pt.num)}">${esc(pt.num)}</button>`
+            : "—") +
+          "</td></tr>";
+      }).join("") + "</table>";
+  }
+
+  function togglePoints(tr, p, cols) {
+    const next = tr.nextElementSibling;
+    if (next && next.classList.contains("items-row")) { next.remove(); return; }
+    const row = el("tr", "items-row");
+    const cell = el("td");
+    cell.colSpan = cols;
+    if (p.n >= CHART_MIN_POINTS) {
+      const box = el("div", "pchart");
+      box.append(priceLine(p.points));
+      cell.append(box);
+    }
+    const tb = el("div", null, pointsTable(p));
+    cell.append(tb);
+    tb.querySelectorAll("button.pinv").forEach(b => {
+      b.addEventListener("click", () => {
+        P.set("q", b.dataset.n);      // 發票號碼進關鍵字＝清單只剩那一張
+        P.delete("cat");
+        show("list");
+      });
+    });
+    row.append(cell);
+    tr.after(row);
+  }
+
+  function priceView() {
+    const R = D.priceRule || {};
+    const PR = D.price || {};
+    const pairs = Array.isArray(PR.pairs) ? PR.pairs : [];
+    const S = PR.stats || {};
+    const card = el("div", "card");
+    card.append(el("h2", null, "價格追蹤"));
+    card.append(el("div", "desc",
+      `同一家店、品名完全相同、至少 ${R.minPoints} 個不同購買日就會被追蹤；` +
+      `「漲價」＝最近一次單價高於先前價格的中位數 ${R.risePct}% 以上。` +
+      "不跨店比價——不同店的同名商品未必是同一件東西。"));
+    if (!pairs.length) {
+      card.append(el("div", "note",
+        "還沒有可追蹤的品項——同一家店的同一個品名要買過兩次以上才比得出價格。"));
+      body.append(card);
+      return;
+    }
+    const tiles = el("div", "tiles");
+    for (const [label, value, extra] of [
+      ["可追蹤品項", S.pairs + " 項", `同店同品名、${R.minPoints} 個購買日以上`],
+      ["偵測到漲價", S.risen + " 項", `最近一次高於先前中位數 ${R.risePct}% 以上`],
+      ["已排除", S.spreadExcluded + " 項",
+       `價格散布超過 ${R.spreadCap} 倍，疑似同名不同品（全表仍查得到）`],
+    ]) {
+      const t = el("div", "tile");
+      t.append(el("div", "label", label), el("div", "value", value),
+               el("div", "delta", extra));
+      tiles.append(t);
+    }
+    card.append(tiles);
+
+    const COLS = 7;
+    const toSeller = wrap => wrap.querySelectorAll("button.pseller").forEach(b => {
+      b.addEventListener("click", () => { P.set("seller", b.dataset.s); show("seller"); });
+    });
+    const sellerCell = p =>
+      `<td><button class="linkish pseller" data-s="${esc(p.seller)}">${esc(p.seller)}</button></td>`;
+    const lastCell = p => `<td${p.stale ? ' class="off"' : ""}>${p.last}` +
+      (p.stale ? `（${p.daysSince} 天沒買了）` : "") + "</td>";
+
+    // 漲價清單
+    const risen = pairs.filter(p => p.risen);
+    const rc = el("div", "scrollx");
+    rc.id = "prisen";
+    rc.innerHTML = `<h2 style="margin-top:14px">漲價清單（${risen.length}）</h2>`;
+    if (!risen.length) {
+      rc.append(el("div", "note", "目前沒有偵測到漲價。"));
+    } else {
+      const t = el("div");
+      t.innerHTML = "<div class=\"desc\">點列展開單價時間線</div>" +
+        "<table><tr><th>品名</th><th>店家</th><th class=\"num\">先前</th>" +
+        "<th class=\"num\">最近</th><th class=\"num\">漲幅</th>" +
+        "<th class=\"num\">價格點</th><th>上次購買</th></tr>" +
+        risen.map((p, i) =>
+          `<tr class="inv" data-i="${i}"><td>${esc(p.desc)}</td>` +
+          sellerCell(p) +
+          `<td class="num">${pmoney(p.base)}</td>` +
+          `<td class="num">${pmoney(p.latest)}</td>` +
+          `<td class="num">+${p.pct}%</td>` +
+          `<td class="num">${p.n}</td>` + lastCell(p) + "</tr>").join("") +
+        "</table>";
+      t.querySelectorAll("tr.inv").forEach(tr => {
+        tr.addEventListener("click", evt => {
+          if (evt.target.closest("button")) return;
+          togglePoints(tr, risen[+tr.dataset.i], COLS);
+        });
+      });
+      toSeller(t);
+      rc.append(t);
+    }
+    if (S.spreadExcluded)
+      rc.append(el("div", "note",
+        `已排除 ${S.spreadExcluded} 項：同店同品名但價格散布超過 ${R.spreadCap} 倍，` +
+        "疑似同名不同品（例如規格不同卻共用一個品名）。它們仍列在下方全表。"));
+    card.append(rc);
+
+    // 全表
+    const ft = el("div");
+    ft.id = "pall";
+    ft.innerHTML = `<h2 style="margin-top:18px">全部可追蹤品項（${pairs.length}）</h2>`;
+    const ff = el("div", "filters");
+    ff.innerHTML = '<input type="search" id="pq" placeholder="品名或店家">';
+    const fstat = el("div", "stat");
+    const fwrap = el("div", "scrollx");
+    ft.append(ff, fstat, fwrap);
+    card.append(ft);
+    body.append(card);
+
+    const pq = ff.querySelector("#pq");
+    function paintFull() {
+      const q = pq.value.trim().toLowerCase();
+      const rows = q
+        ? pairs.filter(p => (p.desc + "\n" + p.seller).toLowerCase().includes(q))
+        : pairs;
+      fstat.textContent = `${rows.length} 項`
+        + (q ? `（全部 ${pairs.length} 項）` : "");
+      fwrap.innerHTML = "<table><tr><th>品名</th><th>店家</th>" +
+        "<th class=\"num\">價格點</th><th class=\"num\">最低</th>" +
+        "<th class=\"num\">最高</th><th>上次購買</th><th>狀態</th></tr>" +
+        rows.map((p, i) =>
+          `<tr class="inv" data-i="${i}"><td>${esc(p.desc)}</td>` +
+          sellerCell(p) +
+          `<td class="num" title="${p.spanDays} 天內">${p.n}</td>` +
+          `<td class="num">${pmoney(p.min)}</td>` +
+          `<td class="num">${pmoney(p.max)}</td>` + lastCell(p) +
+          // 漲價不套 .ok——那是 --up-good（綠），會讀成「漲價是好事」。
+          // 有事的用一般色、沒事的靜音，層次夠了也不必再發明一個色票
+          (p.risen ? `<td>漲價 +${p.pct}%</td>`
+            : `<td class="off">${p.spreadFlagged ? `散布 ${p.spread} 倍`
+              : p.max === p.min ? "持平" : "有波動"}</td>`) +
+          "</tr>").join("") + "</table>";
+      fwrap.querySelectorAll("tr.inv").forEach(tr => {
+        tr.addEventListener("click", evt => {
+          if (evt.target.closest("button")) return;
+          togglePoints(tr, rows[+tr.dataset.i], COLS);
+        });
+      });
+      toSeller(fwrap);
+    }
+    pq.addEventListener("input", paintFull);
+    paintFull();
+  }
+
   // ---- 視圖切換 ---------------------------------------------------------
   function show(view) {
     if (view !== "seller") P.delete("seller");
@@ -707,6 +926,7 @@ TW.page({
     body.innerHTML = "";
     if (view === "list") listView();
     else if (view === "seller") sellerView();
+    else if (view === "price") priceView();
     else fixedView();
     syncUrl(view);
   }

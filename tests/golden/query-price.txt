@@ -7,56 +7,64 @@
       a.map  "🗺 消費地圖"
     button.theme  "🌗 自動"
   div.chips
-    button.chip.on  "發票清單"
+    button.chip  "發票清單"
     button.chip  "店家查詢"
     button.chip  "固定支出"
-    button.chip  "價格追蹤"
+    button.chip.on  "價格追蹤"
   div
     div.card
-      h2  "搜尋與篩選"
-      div.desc  "關鍵字比對店家（含公司名）、品名、發票號碼、日期（如 2026-04-26）；條件之間是 AND"
-      div.filters
-        input
-        label  "月份 ～"
-          input
-          input
-        label  "分類"
-          select
-            option  "全部"
-            option  "電信"
-            option  "超市"
-            option  "手搖飲"
-            option  "未分類"
-        label  "金額 ～"
-          input
-          input
-        label  "只看非必要"
-          input
-      div.stat
-        span  "2 張發票・NT$120"
-        button.linkish  "另存 CSV"
+      h2  "價格追蹤"
+      div.desc  "同一家店、品名完全相同、至少 2 個不同購買日就會被追蹤；「漲價」＝最近一次單價高於先前價格的中位數 5% 以上。不跨店比價——不同店的同名商品未必是同一件東西。"
+      div.tiles
+        div.tile
+          div.label  "可追蹤品項"
+          div.value  "2 項"
+          div.delta  "同店同品名、2 個購買日以上"
+        div.tile
+          div.label  "偵測到漲價"
+          div.value  "0 項"
+          div.delta  "最近一次高於先前中位數 5% 以上"
+        div.tile
+          div.label  "已排除"
+          div.value  "0 項"
+          div.delta  "價格散布超過 3 倍，疑似同名不同品（全表仍查得到）"
       div.scrollx
-        table
-          tbody
-            tr
-              th.sortable  "日期 ▼"
-              th  "店家"
-              th  "分類"
-              th.num.sortable  "金額"
-              th  "發票號碼"
-            tr.inv
-              td  "2026-06-05"
-              td  "珍奶測試店"
-              td  "手搖飲"
-              td.num  "60"
-              td  "AA9"
-            tr.inv
-              td  "2026-04-18"
-              td  "珍奶測試店"
-              td  "手搖飲"
-              td.num  "60"
-              td  "AA4"
-      div.more
+        h2  "漲價清單（0）"
+        div.note  "目前沒有偵測到漲價。"
+      div
+        h2  "全部可追蹤品項（2）"
+        div.filters
+          input
+        div.stat  "2 項"
+        div.scrollx
+          table
+            tbody
+              tr
+                th  "品名"
+                th  "店家"
+                th.num  "價格點"
+                th.num  "最低"
+                th.num  "最高"
+                th  "上次購買"
+                th  "狀態"
+              tr.inv
+                td  "月租費"
+                td
+                  button.linkish.pseller  "測試電信"
+                td.num  "3"
+                td.num  "599"
+                td.num  "599"
+                td  "2026-05-05"
+                td.off  "持平"
+              tr.inv
+                td  "珍珠鮮奶茶"
+                td
+                  button.linkish.pseller  "珍奶測試店"
+                td.num  "2"
+                td.num  "60"
+                td.num  "60"
+                td  "2026-06-05"
+                td.off  "持平"
   div.note  "資料截至 2026-07-31 09:00・全部在本機運算、不外連（docs/adr/0002）・品項與發票號碼只存在本機 data.js"
 
 ── 亮色
@@ -64,8 +72,8 @@
 @style body  color=rgb(11, 11, 11) background-color=rgb(249, 249, 247) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=24px border-radius=0px border-top-width=0px display=block
 @style header h1  color=rgb(11, 11, 11) background-color=rgba(0, 0, 0, 0) font-size=20px font-weight=650 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
 @style .sub  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12.5px font-weight=400 margin-top=2px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
-@style .tiles  (無此元素)
-@style .tile  (無此元素)
+@style .tiles  color=rgb(11, 11, 11) background-color=rgba(0, 0, 0, 0) font-size=14px font-weight=400 margin-top=0px margin-bottom=16px padding-top=0px border-radius=0px border-top-width=0px display=grid
+@style .tile  color=rgb(11, 11, 11) background-color=rgb(252, 252, 251) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=14px border-radius=10px border-top-width=1px display=block
 @style .card  color=rgb(11, 11, 11) background-color=rgb(252, 252, 251) font-size=14px font-weight=400 margin-top=0px margin-bottom=16px padding-top=16px border-radius=10px border-top-width=1px display=block
 @style .desc  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=400 margin-top=0px margin-bottom=10px padding-top=0px border-radius=0px border-top-width=0px display=block
 @style .note  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=400 margin-top=10px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
@@ -76,7 +84,7 @@
 @style .wrap  color=rgb(11, 11, 11) background-color=rgba(0, 0, 0, 0) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
 @style button.theme  color=rgb(82, 81, 78) background-color=rgb(252, 252, 251) font-size=12px font-weight=400 margin-top=0px margin-bottom=0px padding-top=3px border-radius=999px border-top-width=1px display=block
 @style #stat  (無此元素)
-@style button.chip  color=rgb(42, 120, 214) background-color=rgb(252, 252, 251) font-size=13px font-weight=650 margin-top=0px margin-bottom=0px padding-top=4px border-radius=999px border-top-width=1px display=block
+@style button.chip  color=rgb(82, 81, 78) background-color=rgb(252, 252, 251) font-size=13px font-weight=400 margin-top=0px margin-bottom=0px padding-top=4px border-radius=999px border-top-width=1px display=block
 @style i.swatch  (無此元素)
 @style .empty  (無此元素)
 @style .trend  (無此元素)
@@ -87,8 +95,8 @@
 @style body  color=rgb(255, 255, 255) background-color=rgb(13, 13, 13) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=24px border-radius=0px border-top-width=0px display=block
 @style header h1  color=rgb(255, 255, 255) background-color=rgba(0, 0, 0, 0) font-size=20px font-weight=650 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
 @style .sub  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12.5px font-weight=400 margin-top=2px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
-@style .tiles  (無此元素)
-@style .tile  (無此元素)
+@style .tiles  color=rgb(255, 255, 255) background-color=rgba(0, 0, 0, 0) font-size=14px font-weight=400 margin-top=0px margin-bottom=16px padding-top=0px border-radius=0px border-top-width=0px display=grid
+@style .tile  color=rgb(255, 255, 255) background-color=rgb(26, 26, 25) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=14px border-radius=10px border-top-width=1px display=block
 @style .card  color=rgb(255, 255, 255) background-color=rgb(26, 26, 25) font-size=14px font-weight=400 margin-top=0px margin-bottom=16px padding-top=16px border-radius=10px border-top-width=1px display=block
 @style .desc  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=400 margin-top=0px margin-bottom=10px padding-top=0px border-radius=0px border-top-width=0px display=block
 @style .note  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=400 margin-top=10px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
@@ -99,7 +107,7 @@
 @style .wrap  color=rgb(255, 255, 255) background-color=rgba(0, 0, 0, 0) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
 @style button.theme  color=rgb(195, 194, 183) background-color=rgb(26, 26, 25) font-size=12px font-weight=400 margin-top=0px margin-bottom=0px padding-top=3px border-radius=999px border-top-width=1px display=block
 @style #stat  (無此元素)
-@style button.chip  color=rgb(57, 135, 229) background-color=rgb(26, 26, 25) font-size=13px font-weight=650 margin-top=0px margin-bottom=0px padding-top=4px border-radius=999px border-top-width=1px display=block
+@style button.chip  color=rgb(195, 194, 183) background-color=rgb(26, 26, 25) font-size=13px font-weight=400 margin-top=0px margin-bottom=0px padding-top=4px border-radius=999px border-top-width=1px display=block
 @style i.swatch  (無此元素)
 @style .empty  (無此元素)
 @style .trend  (無此元素)
@@ -110,8 +118,8 @@
 @style body  color=rgb(255, 255, 255) background-color=rgb(13, 13, 13) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=24px border-radius=0px border-top-width=0px display=block
 @style header h1  color=rgb(255, 255, 255) background-color=rgba(0, 0, 0, 0) font-size=20px font-weight=650 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
 @style .sub  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12.5px font-weight=400 margin-top=2px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
-@style .tiles  (無此元素)
-@style .tile  (無此元素)
+@style .tiles  color=rgb(255, 255, 255) background-color=rgba(0, 0, 0, 0) font-size=14px font-weight=400 margin-top=0px margin-bottom=16px padding-top=0px border-radius=0px border-top-width=0px display=grid
+@style .tile  color=rgb(255, 255, 255) background-color=rgb(26, 26, 25) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=14px border-radius=10px border-top-width=1px display=block
 @style .card  color=rgb(255, 255, 255) background-color=rgb(26, 26, 25) font-size=14px font-weight=400 margin-top=0px margin-bottom=16px padding-top=16px border-radius=10px border-top-width=1px display=block
 @style .desc  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=400 margin-top=0px margin-bottom=10px padding-top=0px border-radius=0px border-top-width=0px display=block
 @style .note  color=rgb(137, 135, 129) background-color=rgba(0, 0, 0, 0) font-size=12px font-weight=400 margin-top=10px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
@@ -122,7 +130,7 @@
 @style .wrap  color=rgb(255, 255, 255) background-color=rgba(0, 0, 0, 0) font-size=14px font-weight=400 margin-top=0px margin-bottom=0px padding-top=0px border-radius=0px border-top-width=0px display=block
 @style button.theme  color=rgb(195, 194, 183) background-color=rgb(26, 26, 25) font-size=12px font-weight=400 margin-top=0px margin-bottom=0px padding-top=3px border-radius=999px border-top-width=1px display=block
 @style #stat  (無此元素)
-@style button.chip  color=rgb(57, 135, 229) background-color=rgb(26, 26, 25) font-size=13px font-weight=650 margin-top=0px margin-bottom=0px padding-top=4px border-radius=999px border-top-width=1px display=block
+@style button.chip  color=rgb(195, 194, 183) background-color=rgb(26, 26, 25) font-size=13px font-weight=400 margin-top=0px margin-bottom=0px padding-top=4px border-radius=999px border-top-width=1px display=block
 @style i.swatch  (無此元素)
 @style .empty  (無此元素)
 @style .trend  (無此元素)

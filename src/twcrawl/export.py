@@ -15,6 +15,7 @@ import json
 import shutil
 from collections import defaultdict
 from pathlib import Path
+from statistics import median
 
 from . import db
 from .categories import Classifier, UNCATEGORIZED
@@ -261,6 +262,118 @@ def _detect_fixed(inv_rows: list[dict]) -> list[dict]:
     return sorted(found, key=lambda x: (not x["active"], -x["monthly"]))
 
 
+# 價格追蹤的判準（issue #23）。查詢頁把這些數字寫進說明文案，所以由 payload
+# 帶過去——理由同 FIXED_RULE：門檻在這裡、文案在頁面，改了門檻文案不會跟著改。
+PRICE_RULE = {
+    "minPoints": 2,     # 至少幾個不同購買日才算「可追蹤」（下限是 2，見 _detect_price）
+    "risePct": 5,       # 最近一次高出先前中位數幾 % 才算漲價
+    "spreadCap": 3,     # 高低比超過幾倍就當同名不同品，不進漲價清單
+    "staleDays": 90,    # 幾天沒再買就標「久未購買」——標記，不濾除
+}
+
+
+def _price_of(item: dict) -> float | None:
+    """一列品項的單價：`unit_price` 優先，整個缺了才用 `amount ÷ quantity` 回推。
+
+    **不拿 amount 當價格**——量測顯示 8.1% 的列數量不是 1，拿金額比價會把
+    「買兩包」讀成漲價一倍。回推只在單價是 None 時做（舊版 M/D CSV 解析路徑
+    寫 None；現有資料庫沒有這種列，但 `twcrawl import` 匯入舊格式檔就會產生）。
+
+    單價 0 或負數的列不採用也不回推：那是贈品與折讓，不是這個品項的價格。
+    採用 0 會讓「贈品→正常價」變成無限大的漲幅，回推更會拿到負數。
+    """
+    p = item.get("price")
+    if p is None and item.get("amount") and item.get("qty"):
+        p = item["amount"] / item["qty"]
+    return float(p) if p is not None and p > 0 else None
+
+
+def _detect_price(inv_rows: list[dict]) -> dict:
+    """同店價格追蹤（issue #23）：同一家店、同一個品名原文的單價序列。
+
+    配對鍵是（顯示店家名, 品名原文），**刻意不做品名正規化**——issue #9 的
+    量測顯示同店品名原文已完全穩定（normalize 零合併）；要正規化的是跨店
+    比價，而那條已裁決 no-go。
+
+    「漲了」＝最近一次 > 先前價格的中位數 ×(1+risePct%)。不用首末比：它只看
+    兩端，序列中間漲上去又跌回來會被讀成「沒漲」（量測有 9 個配對是這型）。
+    中位數也讓單次促銷的低點不會假裝成漲價。
+
+    三道清理各自留下數字（`stats`），一個都不靜默丟棄：
+      1. 取不到正價的列（贈品、折讓）
+      2. 同一天、同店、同品名卻不同價的那一天——兩列不是同一個東西
+      3. 高低比超過 spreadCap 的配對：**不從全表消失**，只是不進漲價清單。
+         實測庫內就有一個 6.5 倍的配對，它會排在漲幅第一列而且是假的。
+    """
+    stats = {"pairs": 0, "risen": 0, "spreadExcluded": 0,
+             "rowsDropped": 0, "daysDropped": 0}
+    if not inv_rows:
+        return {"pairs": [], "stats": stats}
+
+    by_day: dict[tuple[str, str], dict[str, list]] = {}
+    for v in inv_rows:
+        if not v.get("seller"):
+            continue
+        for it in v.get("items") or []:
+            desc = it.get("desc")
+            if not desc:
+                continue
+            price = _price_of(it)
+            if price is None:
+                stats["rowsDropped"] += 1
+                continue
+            by_day.setdefault((v["seller"], desc), {}) \
+                  .setdefault(v["date"], []).append((price, v["num"]))
+
+    data_max = _dt.date.fromisoformat(max(v["date"] for v in inv_rows))
+    found: list[dict] = []
+    for (seller, desc), days in by_day.items():
+        series: list[dict] = []
+        for d in sorted(days):
+            same_day = days[d]
+            if len({round(p, 2) for p, _ in same_day}) > 1:
+                stats["daysDropped"] += 1
+                continue
+            price, num = same_day[0]
+            series.append({"date": d, "price": round(price, 2), "num": num})
+        # minPoints 的下限是 2：先前中位數取 series[:-1]，只有一個點時無從比起
+        if len(series) < max(2, PRICE_RULE["minPoints"]):
+            continue
+        vals = [pt["price"] for pt in series]
+        lo, hi = min(vals), max(vals)
+        base = median(vals[:-1])
+        latest = vals[-1]
+        spread = hi / lo
+        rising = base > 0 and latest > base * (1 + PRICE_RULE["risePct"] / 100)
+        flagged = spread > PRICE_RULE["spreadCap"]
+        if rising and flagged:
+            stats["spreadExcluded"] += 1
+        first_d = _dt.date.fromisoformat(series[0]["date"])
+        last_d = _dt.date.fromisoformat(series[-1]["date"])
+        days_since = (data_max - last_d).days
+        # 沒有 first：頁面沒人讀，而且 points[0].date 就是它（#8 輪定的
+        # 「payload 只放有人讀的」；期間以 spanDays 出現在價格點的 tooltip）
+        found.append({
+            "seller": seller, "desc": desc, "points": series,
+            "n": len(series),
+            "last": series[-1]["date"], "min": lo, "max": hi,
+            "spread": round(spread, 2), "spreadFlagged": flagged,
+            "base": round(base, 2), "latest": latest,
+            "pct": round((latest - base) / base * 100, 1) if base else 0.0,
+            "risen": bool(rising and not flagged),
+            "spanDays": (last_d - first_d).days,
+            "daysSince": days_since,
+            "stale": days_since > PRICE_RULE["staleDays"],
+        })
+
+    risen = sorted((p for p in found if p["risen"]), key=lambda p: -p["pct"])
+    rest = sorted((p for p in found if not p["risen"]),
+                  key=lambda p: (-p["n"], p["seller"], p["desc"]))
+    stats["pairs"] = len(found)
+    stats["risen"] = len(risen)
+    return {"pairs": risen + rest, "stats": stats}
+
+
 def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
     """衍生儀表板資料。需要工作區的兩條路徑：比對報告與雲端獎清冊快取。"""
     # 稅籍行業後備一律在這裡接上：Classifier 可能是在拿到 conn 之前建的
@@ -476,6 +589,8 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
         "invoices": invoice_rows,
         "fixed": _detect_fixed(invoice_rows),
         "fixedRule": FIXED_RULE,
+        "price": _detect_price(invoice_rows),
+        "priceRule": PRICE_RULE,
         "months": [months[k] for k in sorted(months)],
         "categories": cat_rows,
         "sellers": sorted(sellers.values(), key=lambda s: -s["total"]),

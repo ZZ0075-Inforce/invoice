@@ -10,6 +10,7 @@
     button.chip.on  "發票清單"
     button.chip  "店家查詢"
     button.chip  "固定支出"
+    button.chip  "價格追蹤"
   div
     div.card
       h2  "搜尋與篩選"
