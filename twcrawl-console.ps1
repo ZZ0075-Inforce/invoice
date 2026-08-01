@@ -1,7 +1,10 @@
-﻿# twcrawl 每月例行的一鍵啟動器（issue #18）。
+﻿# twcrawl 一鍵啟動器（issue #18；#21 起改為開控制台）。
 #
-# 雙擊 twcrawl-update.bat 即可——不必先開終端機、不必 activate venv，
+# 雙擊 twcrawl-console.bat 即可——不必先開終端機、不必 activate venv，
 # 直接呼叫工作區 venv 裡的執行檔。建立桌面捷徑的方法見 README「一鍵啟動」。
+#
+# 這個視窗跑的是本機小站（serve）本身，不是一次性的工作：每月例行、抓發票、
+# 重生報表全都從它開出來的控制台頁按。關掉視窗就整個停止。
 #
 # 為什麼主體在 .ps1 而不是 .bat：cmd.exe 逐位元組解析批次檔，用的是主控台的
 # OEM codepage（繁中 Windows 是 cp950），UTF-8 的中文會被當成 Big5 讀而把
@@ -37,26 +40,28 @@ if (-not (Test-Path -LiteralPath $twcrawl)) {
     Wait-Then-Exit 1
 }
 
-Write-Host '開始每月例行：登入 → 抓發票 → 食安清單 → 比對 → 對獎 → 報表 → 備份'
+Write-Host '正在啟動 twcrawl 控制台…瀏覽器會自己打開。'
 Write-Host ''
-Write-Host '登入那一步會開瀏覽器，需要你本人操作（平台有圖形驗證碼，無法自動）；'
-Write-Host '其餘全自動。跑完會自動開啟儀表板。'
+Write-Host '在頁面上按「每月例行」就會跑完整輪：登入 → 抓發票 → 食安清單 →'
+Write-Host '比對 → 對獎 → 報表 → 備份。進度會即時顯示在頁面上。'
+Write-Host '登入那一步會開瀏覽器要你本人操作（平台有圖形驗證碼，無法自動），'
+Write-Host '完成後回頁面按「我已登入」就會繼續。'
+Write-Host ''
+Write-Host '這個視窗是伺服器本體：關掉它（或按 Ctrl+C）就整個停止。' -ForegroundColor DarkGray
 Write-Host ''
 
-& $twcrawl update
+& $twcrawl serve --control
 $rc = $LASTEXITCODE
 
 if ($rc -ne 0) {
-    # update 的設計是「一步失敗記錄後續跑、結尾彙總、回非零退出碼」，
-    # 所以這裡不必猜是哪一步——上面的彙總已經寫了
+    # serve 起不來的常見原因是跑錯目錄（工作區沒有資料庫），
+    # twcrawl 自己會講人話，這裡只負責把視窗留著讓人看得到
     Write-Host ''
     Write-Host ('=' * 60) -ForegroundColor Yellow
-    Write-Host "有步驟沒有跑完（結束碼 $rc）。" -ForegroundColor Yellow
-    Write-Host '上面的彙總會指出是哪一步。一步失敗不影響其他步驟，'
-    Write-Host '可以只重跑那一步，或直接再執行一次這個啟動器。'
+    Write-Host "控制台沒能啟動（結束碼 $rc）。上面那段訊息說明了原因。" -ForegroundColor Yellow
     Write-Host ('=' * 60) -ForegroundColor Yellow
     Wait-Then-Exit $rc
 }
 
-# 成功就安靜收工：儀表板已經自動開了，留著主控台只是擋路
+# Ctrl+C／關視窗停止的是正常收工，不必留著擋路
 exit 0

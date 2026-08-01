@@ -33,7 +33,9 @@ twcrawl lottery                       # 對獎：傳統獎＋雲端專屬獎（�
                                       #   --offline 免連網、--no-cloud 跳過雲端清冊
 twcrawl export                        # 衍生五頁 out/：dashboard+query+fda+year+map；自動開頁，--no-open 關
 twcrawl serve                         # 本機小站（127.0.0.1）：同頁面＋歸類寫回 categories.local.json
-                                      #   ＋控制台頁（control.html）：從頁面按鈕起工作，不必開終端機
+                                      #   ＋控制台頁（control.html）：每月例行／登入／抓區間／重生報表
+                                      #   都從頁面按鈕起，含登入交接與中止；--control 起站直接開控制台
+                                      #   （工作區的 twcrawl-console.bat 雙擊＝serve --control）
 twcrawl bizreg                        # 財政部稅籍對照表（統編→行業/地址；66MB 公開資料）
 twcrawl geocode                       # 地址→座標（NLSC 門牌級為主；增量）→ out/map.html
 twcrawl backup                        # AES-256 備份包（唯一可上雲產物；state/ 永不進包）
@@ -48,6 +50,7 @@ twcrawl probe <url>                   # 頁面結構偵察報告
 
 `login`/`capture` 需要互動：由代理（Claude）背景啟動時，設 `TWCRAWL_DONE_FILE=<路徑>`
 改為訊號檔收尾——使用者只操作瀏覽器、在對話說完成，代理建立該檔案即收工。實測這是最穩的流程。
+控制台頁的「我已登入」走的是同一套（協定收在 `operator_signal`，見架構）。
 
 ## 已定案的決策（不要重新討論）
 
@@ -89,7 +92,8 @@ src/twcrawl/
 │                 KeyboardInterrupt 不攔）。純委派的 serve/bizreg/geocode/probe
 │                 刻意留在 cli.py 直接呼叫——包一層不會讓複雜度集中
 ├── browser.py    Playwright session、wait_for_operator（pump！、中止拋
-│                 KeyboardInterrupt 好與「步驟失敗」分辨）、storage_state；
+│                 KeyboardInterrupt 好與「步驟失敗」分辨、訊號檔模式印
+│                 operator_signal.AWAITING_LINE 給控制台對）、storage_state；
 │                 session 以檔案路徑傳入，這個模組不知道工作區在哪
 ├── capture_index.py  `captures/<目錄>/index.json` 的單一定義：Entry（NamedTuple）
 │                 ＋ Index（seq、隨錄隨寫 flush、路徑相對化）＋ 容錯讀取。
@@ -178,24 +182,45 @@ src/twcrawl/
 ├── serve.py      本機小站（ADR-0002 雙模式；只綁 127.0.0.1）：靜態服務 out/ ＋
 │                 POST /api/rules 併規則入 categories.local.json→重生 data.js；
 │                 ThreadingHTTPServer，每請求自開 SQLite 連線（執行緒安全）。
-│                 控制台端點（#20）：POST /api/jobs 起白名單工作、
-│                 GET /api/jobs/current 取進度。**API 一律擋跨來源**（GET 也擋
+│                 控制台端點（#20、#21）：POST /api/jobs 起白名單工作（含
+│                 params）、GET /api/jobs/current 取進度、POST /api/jobs/signal
+│                 完成人工交接、POST /api/jobs/cancel 中止。signal／cancel 在
+│                 「沒在等人工／沒有工作在跑」時回 409 不假裝成功——訊號檔提早
+│                 躺著，login 真的問起時會被立刻放行。**API 一律擋跨來源**（GET 也擋
 │                 ——工作輸出含使用者資料，不能只靠瀏覽器的 CORS 政策把關）；
 │                 瀏覽器跨來源必帶 Origin，沒帶的（curl／測試的 urllib）放行
+├── operator_signal.py  人工交接的訊號協定（#21）：`TWCRAWL_DONE_FILE` 的變數名、
+│                 「我在等人工」的機器可讀標記（`AWAITING_LINE`）、送出／收下
+│                 訊號檔。**兩端在不同行程**——等的一端是子行程
+│                 （`browser.wait_for_operator`），按「我已登入」的一端是 serve
+│                 （`jobs`／控制台頁），中間只有環境變數與 stdout，所以那兩個
+│                 字串必須是同一份定義：各抄一份的失敗方式是**靜默**的（按鈕
+│                 從此不出現，而終端機那條路照樣會動，什麼都不會變紅）。
+│                 訊號檔用完一定要收掉，否則下一次等待被上一次的檔案立刻放行。
+│                 這個模組不 import 其他 twcrawl 模組（比照 capture_index）
 ├── jobs.py       控制台的背景工作：以子行程跑 `python -m twcrawl <指令>`。
 │                 **為什麼是子行程**——serve 是長駐進程，改過 Python 不重啟就
 │                 用到舊模組（2026-07-29 咬過一次），子行程每次都是最新程式碼；
 │                 Playwright 的事件迴圈假設也不該和 HTTP server 的執行緒混。
 │                 範圍限這裡啟動的工作：`/api/rules` 的重生仍走進程內，照舊要
 │                 重啟。白名單 ALLOWED 是唯一的注入防線——端點收的是**工作名稱
-│                 不是 argv**，頁面沒有機會拼命令列。同時只准一個（查與設在同
-│                 一個鎖裡；分兩步做，兩個請求會同時通過）。`_run` 的 finally
-│                 不可拿掉：returncode 留在 None 就是 state 永遠 running →
-│                 Runner 永久 Busy → 只能重啟 serve。子行程的環境變數是必要的
-│                 不是保險：PYTHONIOENCODING/-X utf8（管線下 Python 改用地區
-│                 編碼，zh-TW Windows 是 cp950，中文會在子行程內炸）、
-│                 PYTHONUNBUFFERED（否則塊狀緩衝，進度要等結束才一次冒出來）。
-│                 這個模組不 import 其他 twcrawl 模組、不知道有 HTTP 這回事
+│                 與具名參數、不是 argv**，頁面沒有機會拼命令列；參數也不是原樣
+│                 串進去，fetch 的月份要過 MONTH_RE，argv 的組法留在這個模組。
+│                 同時只准一個（查與設在同一個鎖裡；分兩步做，兩個請求會同時
+│                 通過）。`_run` 的 finally 不可拿掉：returncode 留在 None 就是
+│                 state 永遠 running → Runner 永久 Busy → 只能重啟 serve。
+│                 子行程的環境變數是必要的不是保險：PYTHONIOENCODING/-X utf8
+│                 （管線下 Python 改用地區編碼，zh-TW Windows 是 cp950，中文會
+│                 在子行程內炸）、PYTHONUNBUFFERED（否則塊狀緩衝，進度要等結束
+│                 才一次冒出來）、TWCRAWL_DONE_FILE（登入改等訊號檔）。
+│                 **stdin 一定要 DEVNULL**：serve 從終端機起的話子行程會繼承那個
+│                 tty，update 的備份密碼 getpass 就停在沒人看的視窗上等輸入，
+│                 控制台永遠顯示「執行中」；斷開之後那一步以人話跳過。
+│                 中止走 `_kill_tree`（Windows taskkill /T、POSIX killpg）——
+│                 `terminate()` 只殺得到直接的子行程，長工底下的 Chromium 會變成
+│                 孤兒。`attach()` 的回傳值是「中止比 Popen 早一步」那個競態的
+│                 出口。這個模組不知道有 HTTP 這回事，也不 import 其他 twcrawl
+│                 模組，唯一例外是 operator_signal（協定要同一份定義）
 ├── __main__.py   讓 `python -m twcrawl` 可用。jobs 起子行程時不必猜 console
 │                 script 裝在哪（venv 腳本目錄各平台不同），sys.executable 一定
 │                 指向同一個環境
@@ -218,8 +243,13 @@ src/twcrawl/
 ├── geocode.py    地址→座標：NLSC TextQueryMap 門牌級為主（**要帶 maps.nlsc.gov.tw
 │                 的 Referer** 否則 PERMISSION DENIED）、Nominatim 路段級後備（台灣
 │                 門牌會 MISS）；稅籍地址須清洗（全形、里鄰、截到「號」）
-├── web/control.html 控制台（#20，serve 專屬）：按鈕起工作、輸出即時顯示、
-│                 成功/失敗狀態。**忙碌（409）與連線錯誤不是「工作失敗」**——
+├── web/control.html 控制台（#20、#21，serve 專屬）：每月例行／登入／抓區間／
+│                 重生報表四顆按鈕、輸出即時顯示、成敗與中止狀態。登入交接區
+│                 **只在子行程真的在等的時候才出現**（job.awaiting）——提早按，
+│                 訊號檔會躺在那裡，login 真正問起時立刻被放行，人還沒動手。
+│                 卡在交接時狀態燈說「等你登入」不說「執行中」（後者會讓人以為
+│                 機器在忙，其實它在等自己）；中止是使用者按的，不套失敗色。
+│                 **忙碌（409）與連線錯誤不是「工作失敗」**——
 │                 混成同一態的話，別的分頁按下重生時這頁會顯示失敗，其實什麼
 │                 都沒失敗，而真正在跑的工作從此看不到。工作輸出一律
 │                 textContent（那些行含店家名與路徑，innerHTML 等於讓子行程的
@@ -650,8 +680,26 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   字面刪除，改問 `ws.state.name`（Workspace 是路徑的單一來源；改了那邊沒跟上
   的失敗方式是 cookie 靜靜進了可上雲的包）⑥`cmd_backup` 參數改 ws 在前，
   與同層其他 `cmd_*` 一致。測試 60→61
-- ⬜ 「操作更順手」批次剩餘：#19 import（無阻塞）、
-  #21 長工＋啟動器改指向（等 #20 已備妥，#18 也已完成）、#22 控制台匯入（等 #19）
+- ✅ 控制台接上長工＋啟動器改指向（2026-08-02，issue #21；「操作更順手」批次
+  的收口張）：控制台四顆按鈕——每月例行（`update`）、登入、抓區間（`fetch`
+  帶起訖月份）、重生報表；啟動器改名 `twcrawl-console.bat`，雙擊＝
+  `serve --control`（起站直接開控制台，那個視窗就是伺服器，關掉即停）。
+  **登入交接沿用既有訊號檔機制**，但兩端的字串收進新模組 `operator_signal`
+  ——等的一端在子行程、按的一端在 serve，各抄一份的失敗是靜默的。子行程印
+  `AWAITING_LINE`，jobs 據此亮出「我已登入」；**沒在等的時候按會回 409 而不是
+  假裝成功**（訊號檔提早躺著，login 真的問起時會被立刻放行）。中止走
+  `_kill_tree`（Windows taskkill /T）：`terminate()` 殺不到孫行程，而長工的孫
+  正是 Chromium。這輪還修掉一個一定會咬人的預設：子行程的 stdin 原本繼承
+  serve 的 tty，從終端機起的 serve 跑 update 會停在沒人看的 getpass 上、控制台
+  永遠顯示執行中——改 `stdin=DEVNULL`，備份那步改以人話跳過（要備份就設
+  `TWCRAWL_BACKUP_PASSWORD`，控制台不收密碼）。白名單仍是唯一注入防線，改成
+  收「名稱＋具名參數」，月份過 `MONTH_RE` 才進 argv。
+  **四條路都實地跑過**（不是只有單元測試）：啟動器雙擊 → 控制台頁；真的
+  `login` 工作 → awaiting 亮起 → 中止 → 7 個 Playwright chrome.exe 歸零、
+  runner 沒卡死（隨後 export 496 張正常跑完）；丟棄用工作區裡按下「我已登入」
+  → 子行程接著保存 session、收在 done；關掉視窗 → 8765 沒有殘留 listener。
+  測試 61→64（人工交接兩端＋真行程樹的中止＋端點的參數/409）
+- ⬜ 「操作更順手」批次剩餘：#19 import（無阻塞）、#22 控制台匯入（等 #19）
 - ⬜ 緩辦（要做先問）：CSV 匯出（分類趨勢圖已做＝#11；地圖店家搜尋立案為 #15）
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

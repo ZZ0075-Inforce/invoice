@@ -8,27 +8,82 @@
    （注意範圍：`/api/rules` 的存檔重生仍走進程內的 `export.write_export`，
    那條路徑照舊要重啟 serve。這裡沒有把整個 serve 的問題解掉。）
 2. Playwright 的同步 API 對事件迴圈有自己的假設（見 CLAUDE.md「關鍵教訓」），
-   不該和 HTTP server 的執行緒模型混在一起。fetch 之類的長工遲早要走這條路。
+   不該和 HTTP server 的執行緒模型混在一起。長工（update／fetch）真的會開
+   瀏覽器，issue #21 之後這條路上跑的就是它們。
 3. 進度直接串子行程的 stdout，指令層既有的 print 一行都不用改。
 
-這個模組不 import 其他 twcrawl 模組，也不知道有 HTTP 這回事——它只認得
-「工作名稱 → 一組參數」與「工作區目錄」。
+這個模組不知道有 HTTP 這回事，只認得「工作名稱＋參數 → 一組 argv」與
+「工作區目錄」。它也不 import 其他 twcrawl 模組，唯一的例外是
+`operator_signal`（純 stdlib、沒有領域知識）——人工交接的環境變數名與標記行
+是這個行程與子行程之間的協定，兩端必須是同一份定義。
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
+import re
+import shutil
+import signal as signal_mod
 import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
+from typing import Callable
 
-# 控制台能啟動的指令白名單。**端點收到的是名字、不是 argv**——頁面永遠沒有
-# 機會拼出一段命令列，這是這層唯一的注入防線。
+from . import operator_signal
+
+MONTH_RE = re.compile(r"^\d{4}-(?:0[1-9]|1[0-2])$")
+
+
+class BadParams(ValueError):
+    """參數不合格。訊息是人話，會原樣送回頁面顯示。"""
+
+
+class Busy(RuntimeError):
+    """已經有工作在跑。同時只允許一個：兩個 export 互相蓋 out/ 沒有意義，
+    兩個 fetch 搶同一個登入 session 更沒有。"""
+
+
+def _no_params(argv: list[str], title: str) -> Callable[[dict], tuple[list[str], str]]:
+    def build(params: dict) -> tuple[list[str], str]:
+        if params:
+            raise BadParams(f"「{title}」不吃參數")
+        return list(argv), title
+    return build
+
+
+def _month(params: dict, key: str, label: str) -> str:
+    value = str(params.get(key, "")).strip()
+    if not MONTH_RE.match(value):
+        raise BadParams(f"{label}要填 YYYY-MM（例如 2026-01），收到「{value}」")
+    return value
+
+
+def _fetch(params: dict) -> tuple[list[str], str]:
+    a = _month(params, "from", "起始月份")
+    b = _month(params, "to", "結束月份")
+    if a > b:
+        raise BadParams(f"起始月份（{a}）不能晚於結束月份（{b}）")
+    return ["fetch", "--from", a, "--to", b], f"抓發票 {a} ～ {b}"
+
+
+# 控制台能啟動的工作白名單。**端點收到的是名稱與具名參數、不是 argv**——
+# 頁面永遠沒有機會拼出一段命令列，這是這層唯一的注入防線。參數也不是原樣
+# 串進去：每個值都由上面的 builder 驗過形狀（月份必須是 YYYY-MM），argv
+# 的組法留在這個模組裡。
+#
 # export 帶 --no-open：在伺服器端替使用者開瀏覽器是錯的（工作可能是別的
-# 分頁按下去的），頁面自己有連結。
-ALLOWED: dict[str, list[str]] = {
-    "export": ["export", "--no-open"],
+# 分頁按下去的），頁面自己有連結。update 的 export 步驟同理。
+#
+# login 單獨也給一顆：token 過期時 fetch 會回 401 並要你「重跑 login」
+# （CLAUDE.md「已知的坑」），控制台沒有這顆的話那句話就沒有出口。
+ALLOWED: dict[str, Callable[[dict], tuple[list[str], str]]] = {
+    "export": _no_params(["export", "--no-open"], "重生報表"),
+    "update": _no_params(["update", "--no-open"], "每月例行"),
+    "login": _no_params(["login"], "登入"),
+    "fetch": _fetch,
 }
 
 # 輸出保留上限。工作再長也不該把 serve 的記憶體吃光；超過就丟最舊的，
@@ -36,46 +91,112 @@ ALLOWED: dict[str, list[str]] = {
 MAX_LINES = 2000
 
 
-class Busy(RuntimeError):
-    """已經有工作在跑。同時只允許一個：兩個 export 互相蓋 out/ 沒有意義。"""
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """連子孫一起收掉。
+
+    `proc.terminate()` 只殺得到直接的子行程（`python -m twcrawl`），但長工
+    真正吃資源的是它底下的 Chromium。只砍父的話，使用者看到的是「已中止」，
+    工作管理員裡卻還留著一票 chrome.exe 抱著登入中的頁面——正是驗收條件
+    寫的「半死的子行程」。
+    """
+    if proc.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            # Windows 沒有行程群組可殺；taskkill /T 依父子關係整棵收掉
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, timeout=30)
+        else:
+            os.killpg(os.getpgid(proc.pid), signal_mod.SIGKILL)
+    except Exception:
+        pass  # 下面的 kill() 是後備：至少直接的子行程一定要死
+    with contextlib.suppress(Exception):
+        proc.kill()
 
 
 class Job:
     """一次執行。輸出由讀取執行緒寫入、由請求執行緒讀出，所以行緩衝要上鎖。"""
 
-    def __init__(self, job_id: int, name: str, args: list[str]) -> None:
+    def __init__(self, job_id: int, name: str, args: list[str], title: str,
+                 done_file: Path) -> None:
         self.id = job_id
         self.name = name
         self.args = args
+        self.title = title
+        self.done_file = done_file
         self.returncode: int | None = None
         self._lines: list[str] = []
         self._dropped = 0
+        self._awaiting = False
+        self._cancelled = False
+        self._proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
 
-    @staticmethod
-    def _state_of(returncode: int | None) -> str:
-        if returncode is None:
+    # 下面幾個 _locked 函式只在已經持有 self._lock 時呼叫——threading.Lock
+    # 不可重入，讓它們自己再取一次鎖就是死鎖（#20 的 review 抓過一次）。
+    def _state_locked(self) -> str:
+        if self.returncode is None:
             return "running"
-        return "done" if returncode == 0 else "failed"
+        if self._cancelled:
+            return "cancelled"
+        return "done" if self.returncode == 0 else "failed"
 
     @property
     def state(self) -> str:
         with self._lock:
-            return self._state_of(self.returncode)
+            return self._state_locked()
 
     def finish(self, returncode: int) -> None:
         """收尾。與 add／snapshot 共用同一個鎖：結束碼是「還在跑嗎」的唯一
         依據，讓它在鎖外寫的話，狀態的正確性就只靠寫入順序的巧合。"""
         with self._lock:
             self.returncode = returncode
+            self._awaiting = False
 
     def add(self, line: str) -> None:
         with self._lock:
+            if operator_signal.is_awaiting(line):
+                self._awaiting = True
             self._lines.append(line)
             if len(self._lines) > MAX_LINES:
                 drop = len(self._lines) - MAX_LINES
                 del self._lines[:drop]
                 self._dropped += drop
+
+    def attach(self, proc: subprocess.Popen) -> bool:
+        """記下子行程，並回報「中止在它起來之前就按下了嗎」。
+
+        中止與啟動是兩條執行緒，這個回傳值就是那個競態的出口：先按中止再
+        Popen 成功的話，沒有人會去殺它，工作會一路跑完卻顯示已中止。
+        """
+        with self._lock:
+            self._proc = proc
+            return self._cancelled
+
+    def cancel(self) -> bool:
+        """中止。回 False＝工作已經結束了，沒東西可中止（端點據此回 409）。"""
+        with self._lock:
+            if self.returncode is not None:
+                return False
+            self._cancelled = True
+            proc = self._proc
+        if proc is not None:
+            _kill_tree(proc)
+        return True
+
+    def signal_operator(self) -> bool:
+        """使用者按下「我已登入」：建立子行程正在等的訊號檔。
+
+        回 False＝現在根本沒有在等人工（工作已結束、或別的分頁按過了）。
+        端點據此回 409 而不是假裝成功——否則訊號檔會提早躺在那裡，等到
+        login 真的問起時被立刻放行，人還沒動手就往下跑了。
+        """
+        with self._lock:
+            if not self._awaiting or self.returncode is not None:
+                return False
+            operator_signal.send(self.done_file)  # 寫不出去就讓例外上去，
+            self._awaiting = False                # 旗標不能先清掉
+            return True
 
     def snapshot(self, since: int = 0) -> dict:
         """since＝呼叫端已經拿過幾行的游標。
@@ -89,9 +210,11 @@ class Job:
             return {
                 "id": self.id,
                 "name": self.name,
-                # 鎖不可重入，所以這裡不能走 self.state（它自己也要取鎖）
-                "state": self._state_of(self.returncode),
+                "title": self.title,
+                "state": self._state_locked(),
                 "returncode": self.returncode,
+                # 「在等人工」只有工作還活著時才成立
+                "awaiting": self._awaiting and self.returncode is None,
                 "lines": self._lines[start:],
                 "next": self._dropped + len(self._lines),
                 "dropped": self._dropped,
@@ -114,15 +237,23 @@ class Runner:
         with self._lock:
             return self._job
 
-    def start(self, name: str, cwd: Path) -> Job:
-        """啟動白名單內的工作。名稱不在白名單拋 KeyError，已有工作拋 Busy。"""
+    def start(self, name: str, cwd: Path, params: dict | None = None) -> Job:
+        """啟動白名單內的工作。
+
+        名稱不在白名單拋 KeyError、參數不合格拋 BadParams、已有工作拋 Busy。
+        """
         if name not in ALLOWED:
             raise KeyError(name)
+        # 先驗參數再搶位子：參數打錯不該把「有沒有工作在跑」的狀態動到
+        args, title = ALLOWED[name](dict(params or {}))
         with self._lock:
             if self._job is not None and self._job.state == "running":
-                raise Busy(f"「{self._job.name}」還在跑，等它結束再開下一個。")
+                raise Busy(f"「{self._job.title}」還在跑，等它結束再開下一個。")
             self._seq += 1
-            job = Job(self._seq, name, list(ALLOWED[name]))
+            # 訊號檔放暫存目錄而不是工作區：它是這次執行的內部狀態，不該
+            # 出現在使用者的資料夾裡，也不該有機會被收進備份包
+            workdir = Path(tempfile.mkdtemp(prefix="twcrawl-job-"))
+            job = Job(self._seq, name, args, title, workdir / "done")
             self._job = job
         threading.Thread(target=self._run, args=(job, Path(cwd)),
                          daemon=True).start()
@@ -134,7 +265,10 @@ class Runner:
         #   UnicodeEncodeError——而且是在子行程裡炸，看起來像指令本身壞掉。
         # PYTHONUNBUFFERED：不設的話輸出是塊狀緩衝，進度要等工作結束才一次
         #   冒出來，「即時顯示」就成了空話。
-        env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
+        # TWCRAWL_DONE_FILE：登入那一步改成等訊號檔，不等終端機的 Enter
+        #   （協定見 operator_signal）。
+        env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1",
+                   **{operator_signal.ENV_DONE_FILE: str(job.done_file)})
         argv = [sys.executable, "-X", "utf8", "-m", "twcrawl", *job.args]
         # 這個函式**一定**要替工作收尾。少了 finally，讀管線時的任何例外都會
         # 讓 returncode 永遠留在 None：狀態卡在 running、Runner 從此永久 Busy、
@@ -143,14 +277,25 @@ class Runner:
         try:
             proc = subprocess.Popen(
                 argv, cwd=str(cwd), env=env,
+                # stdin 一定要斷開：serve 可能是從終端機起的，子行程會繼承
+                # 那個 tty，於是 update 的備份密碼 getpass 會停在沒人看的
+                # 視窗上等輸入，控制台則永遠停在「執行中」。斷開之後
+                # `backup_password` 判定為非互動、那一步以人話跳過。
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace", bufsize=1,
+                # POSIX：自成一個行程群組，中止時才殺得掉整棵（Windows 走
+                # taskkill /T，不需要這個旗標）
+                **({} if os.name == "nt" else {"start_new_session": True}),
             )
         except OSError as exc:  # 直譯器不見、cwd 不存在……
             job.add(f"啟動失敗：{exc}")
             job.finish(rc)
+            shutil.rmtree(job.done_file.parent, ignore_errors=True)
             return
         try:
+            if job.attach(proc):   # 中止比 Popen 早一步按下
+                _kill_tree(proc)
             assert proc.stdout is not None
             for line in proc.stdout:
                 job.add(line.rstrip("\n"))
@@ -158,7 +303,8 @@ class Runner:
             rc = proc.wait()
         except Exception as exc:  # 管線讀壞、行程被外力砍掉……
             job.add(f"工作中斷：{exc}")
-            proc.kill()          # 別留下沒人收的孤兒行程
+            _kill_tree(proc)      # 別留下沒人收的孤兒行程（含底下的瀏覽器）
             rc = proc.wait()
         finally:
             job.finish(rc)
+            shutil.rmtree(job.done_file.parent, ignore_errors=True)

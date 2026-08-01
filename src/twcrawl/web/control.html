@@ -9,7 +9,7 @@
 <style>
   /* 文件版面抄的是 dashboard 那份變體（header 間距、a.map 12px）；
      body/button.theme/h1 本來就刻意留各頁（ui.css 註解）。
-     .st 狀態燈與 #out 輸出框是本頁專屬。 */
+     .st 狀態燈、.handoff 人工交接區與 #out 輸出框是本頁專屬。 */
   body {
     background: var(--page); color: var(--text-1);
     font-family: system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif;
@@ -29,6 +29,14 @@
                color: var(--text-1); border-radius: 8px; padding: 7px 16px;
                cursor: pointer; font: inherit; font-weight: 600; }
   button.run:disabled { color: var(--muted); cursor: default; }
+  /* 中止是離開常軌的動作，配色與「跑一個工作」分開 */
+  button.stop { border: 1px solid var(--s2); background: transparent;
+                color: var(--s2); border-radius: 8px; padding: 6px 14px;
+                cursor: pointer; font: inherit; font-size: 13px; }
+  input[type=month] { border: 1px solid var(--border); border-radius: 6px;
+                      background: var(--surface-1); color: var(--text-1);
+                      font: inherit; font-size: 13px; padding: 5px 8px; }
+  label.range { color: var(--text-2); font-size: 13px; }
   .st { font-size: 13px; font-weight: 600; }
   .st.idle { color: var(--muted); }
   .st.running { color: var(--s1); }
@@ -36,6 +44,13 @@
   .st.failed { color: var(--s2); }
   /* 「忙碌／連線有狀況」不是工作失敗，配色也不該和失敗同一個 */
   .st.notice { color: var(--text-2); }
+  /* 中止是使用者自己按的，不是壞掉——所以不套失敗色 */
+  .st.cancelled { color: var(--text-2); }
+  .handoff { border: 1px solid var(--border); border-left: 3px solid var(--s4);
+             background: var(--surface-1); border-radius: 8px;
+             padding: 12px 14px; margin-bottom: 12px; }
+  .handoff p { margin: 0 0 10px; color: var(--text-2); font-size: 13px; }
+  .note { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
   #out {
     background: var(--surface-1); border: 1px solid var(--border);
     border-radius: 8px; padding: 10px 12px; margin: 0;
@@ -72,10 +87,35 @@
 
   <div id="panel" hidden>
     <div class="row">
+      <button class="run" id="run-update">▶ 每月例行</button>
+      <button class="run" id="run-login">登入</button>
       <button class="run" id="run-export">重生報表</button>
       <span class="st idle" id="state">閒置</span>
+      <button class="stop" id="cancel" hidden>中止</button>
     </div>
+    <div class="row">
+      <label class="range">抓指定區間：
+        <input type="month" id="from"> ～ <input type="month" id="to">
+      </label>
+      <button class="run" id="run-fetch">抓發票</button>
+    </div>
+
+    <!-- 人工交接：登入有圖形驗證碼，這一步無法自動（CLAUDE.md 已定案）。
+         只在子行程真的在等的時候才出現——提早按下去，訊號檔會躺在那裡，
+         等 login 真正問起時立刻被放行，人還沒動手就往下跑了。 -->
+    <div id="handoff" class="handoff" hidden>
+      <p><b>請在開啟的瀏覽器完成登入</b>（平台有圖形驗證碼，這一步只能你本人做）。
+         進到會員頁面之後，回來按這顆：</p>
+      <button class="run" id="done-login">我已登入</button>
+    </div>
+
     <pre id="out"></pre>
+    <p class="note">
+      「每月例行」＝登入 → 抓發票 → 食安清單 → 比對 → 對獎 → 報表 → 備份。
+      一步失敗會記錄下來、其餘照跑，結尾有彙總。
+      備份那一步需要事先設好環境變數 <code>TWCRAWL_BACKUP_PASSWORD</code>，
+      否則會以人話跳過（控制台不收密碼）。
+    </p>
   </div>
 </div>
 
@@ -84,8 +124,11 @@
   "use strict";
   const OUT = document.getElementById("out");
   const ST = document.getElementById("state");
-  const BTN = document.getElementById("run-export");
   const NEED = document.getElementById("need-serve");
+  const HANDOFF = document.getElementById("handoff");
+  const CANCEL = document.getElementById("cancel");
+  const RUNS = ["run-update", "run-login", "run-export", "run-fetch"]
+    .map((id) => document.getElementById(id));
 
   try {
     if (!window.TW) throw new Error("ui.js 沒有載入");
@@ -94,6 +137,13 @@
     // http(s) 才有後端。file:// 之下只留說明。
     if (!TW.isServe()) { NEED.hidden = false; return; }
     document.getElementById("panel").hidden = false;
+
+    // 區間預設當月：抓漏最常見的就是「補這個月」，要往回抓再自己改
+    const now = new Date();
+    const thisMonth = now.getFullYear() + "-" +
+      String(now.getMonth() + 1).padStart(2, "0");
+    document.getElementById("from").value = thisMonth;
+    document.getElementById("to").value = thisMonth;
 
     let cursor = 0;    // 已收過幾行（server 端算的總行數，不會倒退）
     let dropped = 0;   // 已知被丟棄的行數，只在增加時提示一次
@@ -108,18 +158,28 @@
       OUT.scrollTop = OUT.scrollHeight;
     }
 
+    function busy(on) {
+      for (const b of RUNS) b.disabled = on;
+      CANCEL.hidden = !on;
+    }
+
     function setState(job) {
       if (!job) {
         ST.className = "st idle"; ST.textContent = "閒置";
-        BTN.disabled = false; return;
+        busy(false); HANDOFF.hidden = true; return;
       }
       const running = job.state === "running";
-      BTN.disabled = running;
+      const what = job.title || job.name;
+      busy(running);
+      // 「在等你登入」時工作其實沒有進度，狀態燈要說實話
+      HANDOFF.hidden = !(running && job.awaiting);
       ST.className = "st " + (job.state === "done" ? "done"
-        : job.state === "failed" ? "failed" : "running");
-      ST.textContent = running ? "執行中：" + job.name
-        : job.state === "done" ? "完成：" + job.name
-        : "失敗：" + job.name + "（結束碼 " + job.returncode + "）";
+        : job.state === "failed" ? "failed"
+        : job.state === "cancelled" ? "cancelled" : "running");
+      ST.textContent = running ? (job.awaiting ? "等你登入：" : "執行中：") + what
+        : job.state === "done" ? "完成：" + what
+        : job.state === "cancelled" ? "已中止：" + what
+        : "失敗：" + what + "（結束碼 " + job.returncode + "）";
     }
 
     /** 控制台自己的狀況（忙碌、連線斷掉）——**不是**工作失敗。
@@ -127,7 +187,7 @@
      *  但其實什麼都沒失敗，而且真正在跑的工作從此看不到。 */
     function notice(msg) {
       ST.className = "st notice"; ST.textContent = msg;
-      BTN.disabled = true;   // 有工作在跑或狀況未明，先別讓人再按
+      busy(true);   // 有工作在跑或狀況未明，先別讓人再按
     }
 
     function absorb(job) {
@@ -166,25 +226,29 @@
       }
     }
 
-    async function run() {
-      BTN.disabled = true;
+    async function post(path, body) {
+      const r = await fetch(path, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(body || {}),
+      });
+      return {status: r.status, body: await r.json()};
+    }
+
+    async function run(cmd, params) {
+      busy(true);
       ST.className = "st running"; ST.textContent = "啟動中…";
       try {
-        const r = await fetch("/api/jobs", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({cmd: "export"}),
-        });
-        const j = await r.json();
-        if (!j.ok) {
+        const {status, body} = await post("/api/jobs", {cmd: cmd, params: params});
+        if (!body.ok) {
           // 409＝已經有工作在跑（很可能是別的分頁按的）。這不是失敗，
           // 接上去看它的進度就好。輸出**不清空**——清了就看不到人家跑到哪。
-          notice(r.status === 409 ? "已有工作在跑，接上進度…"
-                                  : (j.error || ("HTTP " + r.status)));
+          notice(status === 409 ? "已有工作在跑，接上進度…"
+                                : (body.error || ("HTTP " + status)));
           return schedule(200);
         }
-        absorb(j.job);
-        setState(j.job);
+        absorb(body.job);
+        setState(body.job);
         schedule();
       } catch (e) {
         notice("送不出請求（" + (e && e.message ? e.message : e) + "），重試中…");
@@ -192,7 +256,39 @@
       }
     }
 
-    BTN.addEventListener("click", run);
+    document.getElementById("run-update")
+      .addEventListener("click", () => run("update"));
+    document.getElementById("run-login")
+      .addEventListener("click", () => run("login"));
+    document.getElementById("run-export")
+      .addEventListener("click", () => run("export"));
+    document.getElementById("run-fetch").addEventListener("click", () => run(
+      "fetch", {from: document.getElementById("from").value,
+                to: document.getElementById("to").value}));
+
+    document.getElementById("done-login").addEventListener("click", async () => {
+      HANDOFF.hidden = true;    // 按一次就好，別讓人連按
+      try {
+        const {status, body} = await post("/api/jobs/signal");
+        if (!body.ok) notice(body.error || ("HTTP " + status));
+      } catch (e) {
+        notice("送不出「我已登入」（" + (e && e.message ? e.message : e) + "）");
+      }
+      schedule(150);            // 讓下一輪輪詢把真正的狀態接回來
+    });
+
+    CANCEL.addEventListener("click", async () => {
+      CANCEL.disabled = true;
+      try {
+        const {status, body} = await post("/api/jobs/cancel");
+        if (!body.ok) notice(body.error || ("HTTP " + status));
+      } catch (e) {
+        notice("送不出中止（" + (e && e.message ? e.message : e) + "）");
+      }
+      CANCEL.disabled = false;
+      schedule(150);
+    });
+
     poll();   // 進來先問一次：工作可能是別的分頁按的，這頁也該看得到
   } catch (e) {
     // 沒有這層的話，ui.js 沒被複製到就是一片全白，跟「開錯檔案」分不出來

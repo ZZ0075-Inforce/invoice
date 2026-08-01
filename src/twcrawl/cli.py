@@ -102,6 +102,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_srv.add_argument("--port", type=int, default=8765)
     p_srv.add_argument("--no-open", action="store_true", help="不自動開瀏覽器")
+    p_srv.add_argument(
+        "--control", action="store_true",
+        help="開控制台頁而不是月報（一鍵啟動器 twcrawl-console.bat 走這條）")
 
     p_biz = sub.add_parser(
         "bizreg", help="下載財政部稅籍登記，建立本機統編→行業/地址對照表（公開資料）"
@@ -240,7 +243,8 @@ def _dispatch(args: argparse.Namespace, ws: Workspace) -> int:
     if args.cmd == "serve":
         ws.require_db()
         from . import serve as serve_mod
-        serve_mod.serve(ws, port=args.port, open_browser=not args.no_open)
+        serve_mod.serve(ws, port=args.port, open_browser=not args.no_open,
+                        page="control.html" if args.control else "dashboard.html")
         return 0
 
     if args.cmd == "bizreg":

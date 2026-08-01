@@ -1737,7 +1737,7 @@ def _post_json(port: int, path: str, payload: dict, origin: str | None = None):
 
 
 def test_launcher_explains_missing_venv():
-    """一鍵啟動器（#18）：不在工作區時給人話並回非零，而不是閃退。
+    """一鍵啟動器（#18、#21 改為開控制台）：不在工作區時給人話並回非零，而不是閃退。
 
     順帶釘住編碼這件事：中文一旦被搬回 .bat，cmd 會拿主控台的 OEM codepage
     （繁中 Windows 是 cp950）逐位元組解析 UTF-8，指令列被切成假指令、結束碼
@@ -1747,18 +1747,29 @@ def test_launcher_explains_missing_venv():
     import shutil
     import subprocess
 
+    root = Path(__file__).resolve().parent.parent
+
+    # .ps1 必須是 UTF-8 with BOM：Windows PowerShell 5.1 沒有 BOM 就用 ANSI
+    # （zh-TW 是 cp950）讀檔，裡面的中文全變亂碼。這台有沒有 pwsh 7 決定
+    # .bat 走哪個直譯器，所以**跑起來會過不代表別台會過**——直接驗位元組。
+    head = (root / "twcrawl-console.ps1").read_bytes()[:3]
+    assert head == b"\xef\xbb\xbf", \
+        f"twcrawl-console.ps1 要存成 UTF-8 with BOM，實際開頭是 {head!r}"
+    # .bat 反過來：必須純 ASCII（cmd 逐位元組用 OEM codepage 解析，見下）
+    bat = (root / "twcrawl-console.bat").read_bytes()
+    assert max(bat) < 128, "twcrawl-console.bat 必須是純 ASCII，中文一律放 .ps1"
+
     if sys.platform != "win32":
-        print("✓ 一鍵啟動器：非 Windows，略過")
+        print("✓ 一鍵啟動器：非 Windows，只驗了編碼")
         return
 
-    root = Path(__file__).resolve().parent.parent
     with TemporaryDirectory() as td:
         td = Path(td)
-        for name in ("twcrawl-update.bat", "twcrawl-update.ps1"):
+        for name in ("twcrawl-console.bat", "twcrawl-console.ps1"):
             shutil.copyfile(root / name, td / name)
         # 這個暫存目錄沒有 .venv，所以走的是「不在工作區」那條路
         p = subprocess.run(
-            [str(td / "twcrawl-update.bat")], cwd=str(td),
+            [str(td / "twcrawl-console.bat")], cwd=str(td),
             stdin=subprocess.DEVNULL, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=180)
 
@@ -1799,6 +1810,166 @@ def test_jobs_runner_recovers_when_job_cannot_start():
     except KeyError:
         pass
     print("✓ jobs：工作起不來也會收尾（runner 不會永久 Busy）、白名單擋住未知名稱")
+
+
+def test_operator_signal_handoff():
+    """登入交接：控制台按下「我已登入」，正在等的子行程就要往下跑。
+
+    這條鏈跨兩個行程，中間只有環境變數與 stdout 可用：
+      子行程 `wait_for_operator` 印出標記 → jobs 認得標記、控制台亮出按鈕 →
+      按鈕把訊號檔寫到 `job.done_file` → 子行程看到檔案、收掉、繼續。
+    兩端各自手打一份字串的失敗方式是**靜默**的（按鈕從此不出現，而終端機那條
+    路照樣會動），所以這裡把「同一份定義」與兩端的行為一起釘住。
+    """
+    import contextlib as ctxlib
+    import io
+    import os
+    import subprocess
+    import threading
+    import time
+
+    from twcrawl import jobs, operator_signal
+    from twcrawl.browser import wait_for_operator
+
+    # ① 等待的一端：印出機器可讀標記；訊號檔一出現就返回，並且**收掉**它
+    with TemporaryDirectory() as td:
+        flag = Path(td) / "done"
+        os.environ[operator_signal.ENV_DONE_FILE] = str(flag)
+        try:
+            threading.Timer(0.6, lambda: operator_signal.send(flag)).start()
+            buf = io.StringIO()
+            with ctxlib.redirect_stdout(buf):
+                wait_for_operator("（測試）")
+            assert operator_signal.AWAITING_LINE in buf.getvalue(), \
+                f"等待人工時要印出機器可讀標記，實際輸出：{buf.getvalue()!r}"
+            assert not flag.exists(), \
+                "訊號檔用完要收掉，否則下一次等待會被上一次留下的檔案立刻放行"
+        finally:
+            os.environ.pop(operator_signal.ENV_DONE_FILE, None)
+
+    # ② 按按鈕的一端：認得標記才亮按鈕，按下去寫的是子行程正在等的那條路徑
+    with TemporaryDirectory() as td:
+        job = jobs.Job(1, "login", ["login"], "登入", Path(td) / "done")
+        assert not job.snapshot()["awaiting"]
+        assert job.signal_operator() is False, \
+            "沒在等人工就不該放訊號檔——提早放下去，login 真的問起時會被立刻放行"
+        job.add(f"{operator_signal.AWAITING_LINE} 等待訊號檔案出現：…")
+        assert job.snapshot()["awaiting"] is True, "看到標記才亮得出「我已登入」"
+        assert job.signal_operator() is True
+        assert job.done_file.exists(), "「我已登入」要真的產生訊號檔"
+        assert job.snapshot()["awaiting"] is False, "按過一次就不再等了"
+
+    # ③ 接線：runner 交給子行程的環境變數，就是按鈕會寫的那條路徑。
+    #    不真的起行程——換掉 jobs 命名空間裡的 subprocess 參照，錄下呼叫參數。
+    seen: dict = {}
+
+    class _FakeSubprocess:
+        PIPE, STDOUT, DEVNULL = (subprocess.PIPE, subprocess.STDOUT,
+                                 subprocess.DEVNULL)
+        run = staticmethod(subprocess.run)
+
+        @staticmethod
+        def Popen(argv, **kw):
+            seen["argv"] = argv
+            seen.update(kw)
+            raise OSError("（測試）不真的起行程")
+
+    real_subprocess = jobs.subprocess
+    jobs.subprocess = _FakeSubprocess
+    try:
+        runner = jobs.Runner()
+        job = runner.start("update", Path.cwd())
+        for _ in range(100):                  # 啟動失敗是同步的，很快
+            if job.state != "running":
+                break
+            time.sleep(0.05)
+    finally:
+        jobs.subprocess = real_subprocess
+
+    assert seen["env"][operator_signal.ENV_DONE_FILE] == str(job.done_file), \
+        "子行程等的路徑必須就是按鈕會寫的那條，否則「我已登入」按了沒反應"
+    assert seen["stdin"] is subprocess.DEVNULL, (
+        "stdin 一定要斷開：serve 若是從終端機起的，子行程會繼承那個 tty，"
+        "update 的備份密碼 getpass 就停在沒人看的視窗上等輸入，"
+        "而控制台永遠停在「執行中」")
+    print("✓ 人工交接：標記→按鈕→訊號檔→子行程繼續（兩端同一份定義、stdin 斷開）")
+
+
+def _pid_alive(pid: int) -> bool:
+    """這個 pid 還活著嗎。
+
+    Windows 不能用 `os.kill(pid, 0)` 探測——CPython 在那裡會真的去終止行程。
+    """
+    import os
+    import subprocess
+
+    if sys.platform == "win32":
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                             capture_output=True, text=True,
+                             encoding="utf-8", errors="replace").stdout
+        return str(pid) in out
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def test_jobs_cancel_kills_process_tree():
+    """中止不能只殺得到直接的子行程，否則會留下孤兒。
+
+    長工真正吃資源的是 Playwright 起的 Chromium，它是子行程的**子行程**。
+    只 terminate 父的話，頁面顯示「已中止」，工作管理員裡卻還有一票 chrome.exe
+    抱著登入中的頁面——正是驗收條件說的「半死的子行程」。
+    """
+    import subprocess
+    import time
+
+    from twcrawl import jobs
+
+    # 造一棵真的樹：父再生一個孫，把孫的 pid 印出來之後兩個都長睡
+    child_src = (
+        "import subprocess, sys, time;"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)']);"
+        "print(p.pid, flush=True);"
+        "time.sleep(120)"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", child_src], stdout=subprocess.PIPE, text=True,
+        **({} if sys.platform == "win32" else {"start_new_session": True}))
+    try:
+        grandchild = int(proc.stdout.readline().strip())
+        assert _pid_alive(grandchild), "孫行程應該還活著（這是測試的前提）"
+
+        jobs._kill_tree(proc)
+
+        for _ in range(100):
+            if proc.poll() is not None and not _pid_alive(grandchild):
+                break
+            time.sleep(0.05)
+        assert proc.poll() is not None, "直接的子行程沒被殺掉"
+        assert not _pid_alive(grandchild), (
+            f"孫行程（pid {grandchild}）還活著——中止留下了孤兒，"
+            "真實情境下那就是還開著的 Chromium")
+    finally:
+        try:
+            proc.kill()
+            proc.stdout.close()
+        except Exception:
+            pass
+
+    # 中止比行程起來早一步按下：attach 要把這件事回報給 _run，否則沒有人去殺
+    # 它，工作會一路跑完而頁面顯示已中止
+    with TemporaryDirectory() as td:
+        job = jobs.Job(1, "update", ["update"], "每月例行", Path(td) / "done")
+        assert job.cancel() is True
+        assert job.attach(object()) is True, \
+            "先按中止、行程才起來的話，attach 必須回報「已經被中止了」"
+        job.finish(1)
+        assert job.state == "cancelled", "使用者自己按的中止不該顯示成失敗"
+        assert job.cancel() is False, \
+            "已結束的工作沒東西可中止（端點據此回 409，而不是假裝成功）"
+    print("✓ 中止：整棵行程樹收掉（不留孤兒瀏覽器）、搶在啟動之前按也擋得住")
 
 
 def test_serve_jobs_runs_export_in_subprocess():
@@ -1885,11 +2056,147 @@ def test_serve_jobs_runs_export_in_subprocess():
                 raise AssertionError("跨來源 GET 也該被擋")
             except urllib.error.HTTPError as e:
                 assert e.code == 403, f"跨來源 GET 該回 403，卻收到 {e.code}"
+
+            # 沒有在等人工的時候放訊號檔，會讓 login 真的問起時被立刻放行；
+            # 沒有在跑的時候中止則是無事可做。兩個都要說實話，不能假裝成功
+            code5, j5 = _post_json(port, "/api/jobs/signal", {})
+            assert code5 == 409, f"沒在等人工時的 signal 該回 409：{code5} {j5}"
+            code6, j6 = _post_json(port, "/api/jobs/cancel", {})
+            assert code6 == 409, f"沒有工作在跑時的 cancel 該回 409：{code6} {j6}"
+
+            # 參數是**驗過形狀**才進 argv 的（#21）：月份不合格回人話 400
+            code7, j7 = _post_json(
+                port, "/api/jobs",
+                {"cmd": "fetch", "params": {"from": "2026-13", "to": "2026-01"}})
+            assert code7 == 400 and "YYYY-MM" in j7["error"], \
+                f"月份不合格該回人話 400，實際：{code7} {j7}"
+
+            # 合格的參數真的接到 argv 上。這個工作區沒有登入狀態，所以子行程
+            # 會以「找不到登入狀態」收在 failed——那正好證明它真的跑到了 fetch
+            code8, j8 = _post_json(
+                port, "/api/jobs",
+                {"cmd": "fetch", "params": {"from": "2026-01", "to": "2026-02"}})
+            assert code8 == 202, f"合格的 fetch 參數該被接受：{code8} {j8}"
+            assert "2026-01" in j8["job"]["title"], \
+                f"標題要說出抓的區間，實際：{j8['job']['title']!r}"
+
+            deadline = time.time() + 180
+            cursor, lines, state = 0, [], "running"
+            while time.time() < deadline:
+                with urllib.request.urlopen(
+                        f"http://127.0.0.1:{port}"
+                        f"/api/jobs/current?since={cursor}") as r:
+                    snap = json.loads(r.read().decode("utf-8"))["job"]
+                lines += snap["lines"]
+                cursor, state = snap["next"], snap["state"]
+                if state != "running":
+                    break
+                time.sleep(0.2)
+            assert state == "failed", f"沒有登入狀態的 fetch 該失敗：{state}／{lines}"
+            assert any("登入" in ln for ln in lines), \
+                f"失敗原因該是缺登入狀態，實際輸出：{lines}"
         finally:
             httpd.shutdown()
             httpd.server_close()
-    print("✓ serve：/api/jobs 起子行程跑 export（輸出可取、同時只准一個、"
-          "白名單與跨來源防護）")
+    print("✓ serve：/api/jobs 起子行程跑 export／fetch（輸出可取、同時只准一個、"
+          "白名單、參數驗形狀、跨來源與 signal／cancel 的 409）")
+
+
+def test_control_page_login_handoff_and_cancel():
+    """控制台的長工三件事（#21）：登入交接、中止、fetch 的區間參數。
+
+    工作端點是 stub 的（真工作由 test_serve_jobs_runs_export_in_subprocess
+    驗），這裡看的是頁面：等人工的時候有沒有把按鈕亮出來、按下去送的是哪個
+    端點、中止之後狀態燈說的是「已中止」而不是「失敗」。
+    """
+    import threading
+
+    from twcrawl import serve as serve_mod
+    from twcrawl.workspace import Workspace
+
+    # 頁面的所有 POST 都記下來；GET 一律回 window.__job（測試逐段換掉它）
+    stub = """
+      () => {
+        window.__posts = [];
+        window.__job = {id: 7, name: "update", title: "每月例行",
+                        state: "running", returncode: null, awaiting: true,
+                        lines: ["=== 1/7 login ==="], next: 1, dropped: 0};
+        window.fetch = async (url, opts) => {
+          if (opts && opts.method === "POST") {
+            window.__posts.push({url: url, body: JSON.parse(opts.body)});
+            if (url === "/api/jobs") {
+              return {status: 202, json: async () => ({ok: true, job: window.__job})};
+            }
+            // 真的 server 在 signal 之後就不再回報 awaiting——stub 也照做，
+            // 否則下一輪輪詢會把交接區再亮回來
+            if (url === "/api/jobs/signal") window.__job.awaiting = false;
+            return {status: 200, json: async () => ({ok: true})};
+          }
+          return {status: 200, json: async () => ({ok: true, job: window.__job})};
+        };
+      }
+    """
+
+    with TemporaryDirectory() as td:
+        ws = Workspace(Path(td))
+        _stage_pages(ws, a_payload())
+        with browser_context(session_file=None, headed=False) as ctx:
+            httpd = serve_mod.make_server(ws, port=0)
+            threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            try:
+                port = httpd.server_address[1]
+                page = ctx.new_page()
+                errs = []
+                page.on("pageerror", lambda e: errs.append(f"pageerror: {e}"))
+                page.goto(f"http://127.0.0.1:{port}/control.html")
+                page.evaluate(stub)
+                page.click("#run-update")
+
+                # 等人工的時候：交接區出現，狀態燈說的是「等你登入」而不是
+                # 「執行中」——後者會讓人以為機器正在忙，其實它在等自己
+                page.wait_for_selector("#handoff:visible", timeout=5000)
+                assert "等你登入" in page.inner_text("#state"), \
+                    f"卡在人工交接時狀態燈要說實話，實際：{page.inner_text('#state')!r}"
+
+                page.click("#done-login")
+                page.wait_for_selector("#handoff", state="hidden", timeout=5000)
+
+                # 工作繼續跑（不再等人工），中止鍵在、按下去送 cancel 端點
+                page.wait_for_selector("#cancel:visible", timeout=5000)
+                page.click("#cancel")
+                page.evaluate(
+                    "() => { window.__job.state = 'cancelled';"
+                    " window.__job.returncode = 1; }")
+                page.wait_for_selector("#state:has-text('已中止')", timeout=5000)
+                assert "失敗" not in page.inner_text("#state"), \
+                    "自己按的中止不是失敗"
+                assert page.eval_on_selector(
+                    "#state", "e => !e.classList.contains('failed')"), \
+                    "中止不該套用失敗的樣式"
+                assert not page.is_disabled("#run-update"), \
+                    "工作結束後按鈕要能再按"
+
+                # fetch：頁面送的是具名參數（端點收的不是 argv），值取自輸入框
+                page.fill("#from", "2026-03")
+                page.fill("#to", "2026-05")
+                page.click("#run-fetch")
+                page.wait_for_timeout(200)
+                posts = page.evaluate("() => window.__posts")
+                paths = [p["url"] for p in posts]
+                assert paths == ["/api/jobs", "/api/jobs/signal",
+                                 "/api/jobs/cancel", "/api/jobs"], \
+                    f"送出的端點順序不對：{paths}"
+                assert posts[0]["body"]["cmd"] == "update"
+                assert posts[-1]["body"] == {
+                    "cmd": "fetch", "params": {"from": "2026-03", "to": "2026-05"}}, \
+                    f"fetch 該帶區間參數，實際：{posts[-1]['body']}"
+                assert not errs, f"control.html 有 JS 錯誤：{errs}"
+                page.close()
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+    print("✓ 控制台：等人工時亮出「我已登入」（送 signal）、中止不算失敗、"
+          "fetch 帶具名區間參數")
 
 
 def test_control_page_modes_and_output_escaping():

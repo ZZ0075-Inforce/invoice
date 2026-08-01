@@ -10,6 +10,8 @@ from pathlib import Path
 
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
+from . import operator_signal
+
 def _chromium_executable() -> str | None:
     """允許指定既有的 Chromium，避免 playwright 版本與瀏覽器版本不符。
 
@@ -90,19 +92,23 @@ def wait_for_operator(message: str, pump: Page | None = None) -> None:
     page 傳進 pump，讓等待迴圈以 wait_for_timeout 持續讓事件流動。
 
     設定環境變數 TWCRAWL_DONE_FILE 時改為輪詢該檔案是否出現（給無互動
-    終端機的環境用，例如由代理程式在背景啟動、使用者只操作瀏覽器）。
+    終端機的環境用：代理程式在背景啟動、控制台頁的「我已登入」按鈕——
+    使用者只操作瀏覽器，不碰終端機）。協定在 `operator_signal`。
     """
     print()
     print("=" * 68)
     print(message)
     print("=" * 68, flush=True)
 
-    signal = os.environ.get("TWCRAWL_DONE_FILE")
+    signal = operator_signal.done_file()
     done = threading.Event()
     aborted = threading.Event()
 
     if signal:
-        print(f">>> 等待訊號檔案出現：{signal}", flush=True)
+        # 這一行是印給程式對的（控制台靠它決定要不要長出「我已登入」按鈕）。
+        # 上面那段中文是給人看的、會改寫，不可以拿來當判斷依據。
+        print(f"{operator_signal.AWAITING_LINE} 等待訊號檔案出現：{signal}",
+              flush=True)
     else:
         def _stdin_waiter() -> None:
             try:
@@ -115,10 +121,7 @@ def wait_for_operator(message: str, pump: Page | None = None) -> None:
 
     while True:
         if signal:
-            p = Path(signal)
-            if p.exists():
-                with contextlib.suppress(OSError):
-                    p.unlink()
+            if operator_signal.taken(signal):
                 return
         elif done.is_set():
             if aborted.is_set():

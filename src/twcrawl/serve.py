@@ -4,8 +4,9 @@
 偵測到 http: 協定，未分類清單與店家查詢長出「存檔」，POST /api/rules 把規則
 併入 categories.local.json、重跑 export 重生 data.js。只綁 127.0.0.1，不對外。
 
-控制台（issue #20）另外掛兩個端點：POST /api/jobs 啟動白名單內的工作、
-GET /api/jobs/current 取進度。工作本身跑在子行程，理由見 `jobs.py`。
+控制台（issue #20、#21）另外掛四個端點：POST /api/jobs 啟動白名單內的工作、
+GET /api/jobs/current 取進度、POST /api/jobs/signal 完成人工交接（登入）、
+POST /api/jobs/cancel 中止。工作本身跑在子行程，理由見 `jobs.py`。
 """
 
 from __future__ import annotations
@@ -107,6 +108,12 @@ class _Handler(SimpleHTTPRequestHandler):
         if self.path == "/api/jobs":
             self._start_job()
             return
+        if self.path == "/api/jobs/signal":
+            self._signal_job()
+            return
+        if self.path == "/api/jobs/cancel":
+            self._cancel_job()
+            return
         if self.path != "/api/rules":
             self._json(404, {"ok": False, "error": "未知端點"})
             return
@@ -143,22 +150,49 @@ class _Handler(SimpleHTTPRequestHandler):
     def _start_job(self) -> None:
         try:
             n = int(self.headers.get("Content-Length") or 0)
-            name = str(json.loads(self.rfile.read(n).decode("utf-8"))["cmd"])
+            body = json.loads(self.rfile.read(n).decode("utf-8"))
+            name = str(body["cmd"])
+            params = body.get("params") or {}
+            if not isinstance(params, dict):
+                raise ValueError
         except Exception:
-            self._json(400, {"ok": False, "error": '需要 {"cmd": "工作名稱"}'})
+            self._json(400, {"ok": False, "error":
+                             '需要 {"cmd": "工作名稱", "params": {…}}'})
             return
         try:
-            job = self.runner.start(name, self.ws.root)
+            job = self.runner.start(name, self.ws.root, params=params)
         except KeyError:
             self._json(400, {"ok": False, "error":
                              f"不認得的工作：{name}"
                              f"（可用：{'、'.join(jobs_mod.ALLOWED)}）"})
             return
+        except jobs_mod.BadParams as e:   # 人話，原樣給頁面顯示
+            self._json(400, {"ok": False, "error": str(e)})
+            return
         except jobs_mod.Busy as e:
             self._json(409, {"ok": False, "error": str(e)})
             return
-        print(f"控制台啟動工作：{job.name}")
+        print(f"控制台啟動工作：{job.title}")
         self._json(202, {"ok": True, "job": job.snapshot()})
+
+    def _signal_job(self) -> None:
+        """「我已登入」：把訊號檔放下去，等在那裡的子行程就會往下跑。"""
+        job = self.runner.current()
+        if job is None or not job.signal_operator():
+            # 沒在等人工的時候提早放訊號，會讓真正問起時被立刻放行——
+            # 所以這裡拒絕，而不是寫個檔案假裝成功
+            self._json(409, {"ok": False, "error": "現在沒有在等人工操作"})
+            return
+        print("控制台：人工交接完成，工作繼續")
+        self._json(200, {"ok": True})
+
+    def _cancel_job(self) -> None:
+        job = self.runner.current()
+        if job is None or not job.cancel():
+            self._json(409, {"ok": False, "error": "現在沒有進行中的工作"})
+            return
+        print(f"控制台中止工作：{job.title}")
+        self._json(200, {"ok": True})
 
 
 def make_server(ws: Workspace, port: int = 8765) -> ThreadingHTTPServer:
@@ -170,17 +204,17 @@ def make_server(ws: Workspace, port: int = 8765) -> ThreadingHTTPServer:
 
 
 def serve(ws: Workspace, port: int = 8765,
-          open_browser: bool = True) -> None:
+          open_browser: bool = True, page: str = "dashboard.html") -> None:
     conn = db_mod.connect(ws.db)  # 起站先重生，保證頁面是最新資料
     try:
         export.write_export(conn, ws, Classifier(ws.rules))
     finally:
         conn.close()
     httpd = make_server(ws, port)
-    url = f"http://127.0.0.1:{httpd.server_address[1]}/dashboard.html"
+    url = f"http://127.0.0.1:{httpd.server_address[1]}/{page}"
     print(f"serve 模式：{url}")
     print("頁面上的「存檔」會寫回 categories.local.json 並重生資料；"
-          "只綁本機、不對外；Ctrl+C 結束。")
+          "控制台頁可以直接按更新／抓發票；只綁本機、不對外；Ctrl+C 結束。")
     if open_browser:
         import webbrowser
         webbrowser.open(url)
