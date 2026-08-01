@@ -1,7 +1,8 @@
 """twcrawl export — 從資料庫衍生儀表板資料檔並就位模板。
 
-四頁制：`dashboard.html`（月報）＋ `query.html`（查詢頁）＋ `map.html`（地圖）＋
-`fda.html`（食安頁），模板隨 repo 版控；`data.js`（衍生資料）gitignored、可隨時
+五頁制：`dashboard.html`（月報）＋ `query.html`（查詢頁）＋ `fda.html`（食安頁）
+＋ `year.html`（年度回顧）＋ `map.html`（地圖），模板隨 repo 版控；
+`data.js`（衍生資料）gitignored、可隨時
 重生。data.js 用 `<script src>` 載入，避開瀏覽器對 file:// 頁面不能 fetch 本機
 JSON 的限制。品項與發票號碼是本機明文；載具號碼與 raw 永不進 data.js（ADR-0002）。
 """
@@ -19,7 +20,7 @@ from . import db
 from .categories import Classifier, UNCATEGORIZED
 from .workspace import Workspace
 
-# 四頁模板與共用資產（ui.css）的來源目錄；package-relative，不隨工作區走
+# 五頁模板與共用資產（ui.css）的來源目錄；package-relative，不隨工作區走
 WEB_DIR = Path(__file__).parent / "web"
 
 # 食安頁的來源標示（顯示名與事件／監測型態）住在 sites/fda.py 的 SOURCE_META
@@ -506,8 +507,8 @@ def write_export(conn, ws: Workspace, classifier: Classifier,
         + ";\n",
         encoding="utf-8",
     )
-    # 整個 web/ 一起複製，而不是逐檔明列：ui.css 是四頁的必要相依，漏掉一個
-    # 檔案的後果從「少一頁」變成「四頁都壞但看起來像沒資料」。少列一個檔案
+    # 整個 web/ 一起複製，而不是逐檔明列：ui.css 是五頁的必要相依，漏掉一個
+    # 檔案的後果從「少一頁」變成「五頁都壞但看起來像沒資料」。少列一個檔案
     # 不該是靜默的失敗模式
     for src in sorted(web_dir.rglob("*")):
         if src.is_dir():

@@ -1,12 +1,14 @@
 # twcrawl
 
-**比對食藥署的問題商品清單與你自己的電子發票消費紀錄，找出你可能買到的下架／回收商品。**
+**以個人電子發票為底的長期消費資料庫**：自動累積自己的消費紀錄（SQLite），
+供各種分析使用；FDA 問題商品比對是其中一種分析。
 
-三件事：
+四件事：
 
 1. **抓自己的電子發票消費紀錄** — 人工登入財政部電子發票整合服務平台一次，之後指定區間逐月全自動抓取
-2. **抓食藥署問題商品清單** — 強制下架清單、國內回收公告、國外消費紅綠燈警訊，公開頁面不需登入
-3. **比對** — 店家、品項、警訊標題三個層級，輸出報告 CSV
+2. **消費分析五頁** — 月報（分類堆疊／趨勢／預算／消費日曆）、查詢頁、食安頁、年度回顧、消費地圖，全部本機、雙擊即開
+3. **統一發票對獎** — 傳統獎項＋雲端發票專屬獎（官方 PDF 清冊），每月例行順帶比對
+4. **FDA 問題商品比對** — 強制下架清單、國內回收公告、國際警訊三來源；店家、品項、警訊標題三層級，結果在食安頁與報告 CSV
 
 背景與路線評估見 [**可行性評估文件**](docs/feasibility-einvoice.md)。結論是官方 API 自 112/3/31 起不再受理個人申請（需 ISO27001／CNS27001），因此改走人工登入 + 網路層擷取。
 
@@ -75,7 +77,8 @@ twcrawl login                              # 人工登入（僅在憑證失效�
 twcrawl fetch --from 2026-01 --to 2026-07  # 逐月自動抓發票＋品項明細
 twcrawl fda --since 2026-03-01             # 更新問題商品清單
 twcrawl match --since 2026-03-01           # 比對，輸出 out\match_report.csv
-twcrawl export                             # 衍生三頁儀表板（跑完自動開啟，--no-open 關）
+twcrawl lottery                            # 統一發票對獎（傳統獎＋雲端專屬獎）
+twcrawl export                             # 衍生消費分析五頁（跑完自動開啟，--no-open 關）
 ```
 
 ### 1. `login` — 人工登入
@@ -148,25 +151,31 @@ twcrawl match --since 2026-03-01
 
 比對做了全形轉半形與空白正規化，並排除純數字品項（價格、重量）等必然誤報。
 
-### 5. `export` — 消費分析三頁（月報、查詢頁、地圖）
+### 5. `export` — 消費分析五頁（月報、查詢頁、食安頁、年度回顧、地圖）
 
 ```powershell
 twcrawl export            # 跑完自動用預設瀏覽器開啟月報
 twcrawl export --no-open  # 只產出，不開瀏覽器
 ```
 
-從資料庫衍生四頁到 `out\`（含 `data.js`——品項與發票號碼只存在這個本機檔）：
+從資料庫衍生五頁到 `out\`（含 `data.js`——品項與發票號碼只存在這個本機檔）：
 
-- **`dashboard.html` 月報**——每月支出（依店家分類堆疊）、分類累計、店家排行、
-  非必要消費近期清單、FDA 比對命中明細卡；月柱、分類、店家列點下去會帶著條件
-  跳到查詢頁；右上角亮暗主題切換（三頁共用記憶）。
+- **`dashboard.html` 月報**——每月支出（依店家分類堆疊）、分類趨勢（一分類
+  一格的小倍數折線，看「某分類是不是越來越多」）、消費日曆（每日熱力格）、
+  分類累計、店家排行、非必要消費近期清單、FDA 比對命中卡、統一發票對獎磚
+  （有中獎會出現明細卡）；設定了預算（見下）會多出預算磚。月柱、分類、店家
+  列點下去會帶著條件跳到查詢頁；右上角亮暗主題切換（各頁共用記憶）。
 - **`query.html` 查詢頁**——關鍵字搜尋（店家／品名／發票號碼）＋月份、分類、
-  金額篩選，發票逐張展開品項；「店家查詢」看單一店家的月趨勢與品項統計；
-  「固定支出」自動偵測訂閱型消費（同店家、金額相近、月級以上週期、至少 3 次）。
+  金額篩選，發票逐張展開品項（含發票狀態；中獎的列標 🎉、非常態狀態在號碼旁
+  標註）；「店家查詢」看單一店家的月趨勢與品項統計；「固定支出」自動偵測
+  訂閱型消費（同店家、金額相近、月級以上週期、至少 3 次）。
 - **`fda.html` 食安頁**——FDA 比對獨立呈現，不混在消費月報裡：總覽（各來源
   資料量、命中數、三層級判讀基準）＋依來源自動分頁——「中聯油脂案」是事件區，
   「國內回收公告」「國際警訊」是常設監測區。未來出現新食安事件，只要在
   `fda.py` 的 SOURCES 加一條來源，這頁自動長出新分頁，UI 不用改。
+- **`year.html` 年度回顧**——日曆年至今的全貌：年度統計（總額、月均、非必要
+  佔比、對獎戰績）、亮點（單筆最大消費、最貴的一天）、分類全年佔比（與月報
+  同一套顏色）、店家排行。12 月後重跑 `export` 就是完整年度版。
 - **`map.html` 地圖**——見下方 `geocode`。
 
 頁面完全本機、不外連（[`docs/adr/0002`](docs/adr/0002-static-view-serve-writeback.md)；
@@ -187,6 +196,14 @@ twcrawl export --no-open  # 只產出，不開瀏覽器
 `aliases` 則把公司登記名對應到招牌名（例：`"拾光": "DAYLIGHT COFFEE"`），
 儀表板顯示招牌名、公司名放 tooltip。
 
+**預算（選填）**：工作區根目錄放 `budget.local.json`（已 gitignore、金額只在
+本機）就會多出預算磚——每月總額與非必要消費上限皆選填、可只設其一；所有
+月份一律以現行預算對照，磚上點名失守的月份。完全沒設定就完全沒有磚：
+
+```json
+{ "monthly": 25000, "unnecessary": 3000 }
+```
+
 **整理分類最省力：`twcrawl serve`**。起一個只綁本機（127.0.0.1）的小站開同一套
 頁面——未分類清單與查詢頁的店家查詢會多出「存檔」按鈕，填好分類直接寫回
 `categories.local.json` 並重生資料，不用手改 JSON；雙擊開檔的 file:// 模式則提供
@@ -201,12 +218,28 @@ tooltip 與未分類清單顯示行業和常買品項——判斷「這家到底
 **地圖檢視：`twcrawl geocode` → 開 `out\map.html`**。geocode 把稅籍營業地址
 一次性轉成座標（NLSC 門牌定位為主、OSM Nominatim 路段級後備，限速 1 req/s，
 增量、重跑安全）。地圖頁以圓點標示消費地點（顏色＝分類、大小＝金額），
-可用「全部／近三月／近一月」或自訂月份區間篩選；圖例可點選隱藏分類，
-圓點的 popup 有「查這家」直達查詢頁的店家查詢。
+可用「全部／近三月／近一月」或自訂月份區間篩選；圖例可點選隱藏分類；
+搜尋框輸入店家名即時過濾圓點（與圖例、時間篩選取交集，清空即恢復），
+自完成選單選定店家則直接定位；圓點的 popup 有「查這家」直達查詢頁的
+店家查詢。
 注意：**地圖頁開啟時會載入 OpenStreetMap 圖磚**（主儀表板維持零外連）；
 查詢的地址是公開商工登記資料，消費資料本身不出去。
 
-### 6. `backup` — 加密備份包
+### 6. `lottery` — 統一發票對獎
+
+```powershell
+twcrawl lottery                # 傳統獎項＋雲端發票專屬獎
+twcrawl lottery --offline      # 用庫內存過的號碼離線重對
+twcrawl lottery --no-cloud     # 跳過雲端專屬獎清冊（首次下載約 119MB）
+```
+
+抓官方開獎號碼（本期＋上期）比對庫內發票：傳統獎項（特別獎～六獎）比末
+8 碼；雲端發票專屬獎（百萬／2,000／800／500 元）比完整字軌號碼——號碼來自
+官方 PDF 清冊，抽出後以 gz 快取、同期不重下。同張同時符合兩類依規定擇高。
+結果進月報的對獎磚與中獎明細卡（含領獎期限），查詢頁的發票列標 🎉。
+中獎受領獎期限約束，過期不再比對。
+
+### 7. `backup` — 加密備份包
 
 ```powershell
 twcrawl backup                             # 互動輸入密碼，或設 TWCRAWL_BACKUP_PASSWORD
@@ -216,7 +249,7 @@ twcrawl backup                             # 互動輸入密碼，或設 TWCRAWL
 放雲端硬碟**；`state\`（登入 cookie）永遠不進備份。密碼自行保管，遺失即不可讀。
 明細在平台上只保存近 6 個月，本機資料毀損即永久遺失——請定期備份。
 
-### 7. `update` — 每月例行一鍵跑完
+### 8. `update` — 每月例行一鍵跑完
 
 ```powershell
 twcrawl update                # 登入 → fetch（自動補到當月）→ fda → match → lottery → export → backup
@@ -261,14 +294,15 @@ twcrawl probe <url> # 頁面結構偵察報告（表格 id、表頭、分頁連�
 
 | 位置 | 內容 |
 |---|---|
-| `out\twcrawl.sqlite` | `invoices` / `invoice_items` / `fda_rows` |
-| `out\dashboard.html` + `out\query.html` + `out\fda.html` + `out\data.js` | 月報、查詢頁、食安頁（雙擊即開、離線） |
+| `out\twcrawl.sqlite` | `invoices` / `invoice_items` / `fda_rows` / `biz_registry` / `lottery_draws` |
+| `out\dashboard.html` + `out\query.html` + `out\fda.html` + `out\year.html` + `out\data.js` | 月報、查詢頁、食安頁、年度回顧（雙擊即開、離線） |
 | `out\map.html` + `out\vendor\` | 消費地圖（開啟時載入 OSM 圖磚） |
 | `out\match_report.csv` | 比對結果（UTF-8 BOM，Excel 可直接開） |
 | `out\fda_*.csv` | 問題商品清單 |
 | `out\backup\` | AES-256 加密備份包（唯一可上雲的產物） |
 | `out\bgmopen1.zip` | 稅籍登記資料快取（公開資料，非個資） |
 | `categories.local.json` | 個人店家分類規則與招牌名別名 |
+| `budget.local.json` | 個人預算設定（選填；每月總額與非必要上限） |
 | `captures\` | 平台原始回應（**你的消費紀錄**） |
 | `state\` | 登入 cookie（**等同帳號本身**） |
 
@@ -282,13 +316,13 @@ twcrawl probe <url> # 頁面結構偵察報告（表格 id、表頭、分頁連�
 ## 測試
 
 ```powershell
-python tests\test_twcrawl.py                    # 47 個測試，不需要 pytest
+python tests\test_twcrawl.py                    # 56 個測試，不需要 pytest
 python tests\test_twcrawl.py --update-golden    # 有意改動畫面後重生頁面快照
 ```
 
 表格擷取與分頁以本機模擬的 ASP.NET 頁面驗證（含「分頁點了沒反應」與「下一頁提前消失」兩種真實壞掉情境）；解析器、比對、日期邊界、摘要遮蔽則以實際資料形狀驗證。測試會實際啟動 headless Chromium，需先完成 `playwright install`。
 
-四個頁面以**合成 payload**（`a_payload()`）在 headless Chromium 裡實際渲染，斷言零 JS 錯誤、店家名不會被當 HTML 執行、殘缺的 data.js 不會讓整頁空白；畫面結構存成 `tests/golden/*.txt` 快照，有意改動畫面後跑 `--update-golden` 重生並審閱 diff。合成 payload 的形狀由 `test_payload_contract` 與 `export.build_payload` 對齊。
+五個頁面以**合成 payload**（`a_payload()`）在 headless Chromium 裡實際渲染，斷言零 JS 錯誤、店家名不會被當 HTML 執行、殘缺的 data.js 不會讓整頁空白；畫面結構與樣式存成 `tests/golden/*.txt` 快照，有意改動畫面後跑 `--update-golden` 重生並審閱 diff。合成 payload 的形狀由 `test_payload_contract` 與 `export.build_payload` 對齊。互動面（趨勢圖 tooltip、預算磚、狀態顯示、地圖搜尋、色槽取色）各有專屬測試。
 
 ---
 

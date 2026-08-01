@@ -1532,7 +1532,7 @@ def test_export_items_and_query_page():
             export.write_export(conn, ws, cl)
             assert (ws.out / "query.html").exists(), "export 應就位查詢頁"
             assert (ws.out / "fda.html").exists(), "export 應就位食安頁"
-            # ui.js／ui.css 是四頁的必要相依：漏掉的話四頁都壞，而且壞成
+            # ui.js／ui.css 是五頁的必要相依：漏掉的話五頁都壞，而且壞成
             # 「看起來像沒資料」。write_export 複製整個 web/ 就是為了這個
             for asset in ("ui.js", "ui.css", "vendor/leaflet.js"):
                 assert (ws.out / asset).exists(), f"export 應就位 {asset}"

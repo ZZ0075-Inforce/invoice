@@ -16,8 +16,8 @@ FDA 目前接三個來源：中聯油脂案專區強制下架清單（edible_oil
 ```
 pip install -e .                      # 一律 editable；PyPI 上的 twcrawl 是無關的舊套件
 python -m playwright install chromium # playwright 指令找不到時用這個
-python tests/test_twcrawl.py          # 測試（54/54，不用 pytest）
-python tests/test_twcrawl.py --update-golden   # 有意改動四頁畫面後重生 tests/golden/
+python tests/test_twcrawl.py          # 測試（56/56，不用 pytest）
+python tests/test_twcrawl.py --update-golden   # 有意改動五頁畫面後重生 tests/golden/
 
 # 每月例行（一鍵；fetch 區間自動推算、FDA 回溯 90 天只給 feed 型來源）
 twcrawl update                        # login→fetch→fda→match→lottery→export→backup
@@ -31,7 +31,7 @@ twcrawl fda --since 2026-03-01        # 更新問題商品清單（三來源，�
 twcrawl match --since 2026-03-01      # 比對，輸出 out/match_report.csv
 twcrawl lottery                       # 對獎：傳統獎＋雲端專屬獎（首抓清冊約 247MB 入快取）
                                       #   --offline 免連網、--no-cloud 跳過雲端清冊
-twcrawl export                        # 衍生四頁 out/：dashboard+query+fda+map；自動開頁，--no-open 關
+twcrawl export                        # 衍生五頁 out/：dashboard+query+fda+year+map；自動開頁，--no-open 關
 twcrawl serve                         # 本機小站（127.0.0.1）：同頁面＋歸類寫回 categories.local.json
 twcrawl bizreg                        # 財政部稅籍對照表（統編→行業/地址；66MB 公開資料）
 twcrawl geocode                       # 地址→座標（NLSC 門牌級為主；增量）→ out/map.html
@@ -156,8 +156,8 @@ src/twcrawl/
 ├── bizreg.py     財政部 BGMOPEN1 稅籍登記（66MB zip 串流過濾，只留自己的統編入
 │                 biz_registry；欄位以關鍵字定位；Py3.13 需關 VERIFY_X509_STRICT——
 │                 政府憑證缺 SKI）
-├── export.py     四頁衍生（out/data.js＋**複製整個 web/ 目錄**——ui.js 是四頁的必要
-│                 相依，逐檔明列時漏一個會從「少一頁」變成「四頁都壞但看起來像沒
+├── export.py     五頁衍生（out/data.js＋**複製整個 web/ 目錄**——ui.js 是五頁的必要
+│                 相依，逐檔明列時漏一個會從「少一頁」變成「五頁都壞但看起來像沒
 │                 資料」；file:// 不能 fetch JSON 所以走 script src；
 │                 店家附行業/地址/常買品項 top3；發票列含品項全欄位與發票號碼——
 │                 載具號碼、raw 永不進 data.js，ADR-0002；fda.sources 歸戶：match
@@ -178,21 +178,21 @@ src/twcrawl/
 ├── geocode.py    地址→座標：NLSC TextQueryMap 門牌級為主（**要帶 maps.nlsc.gov.tw
 │                 的 Referer** 否則 PERMISSION DENIED）、Nominatim 路段級後備（台灣
 │                 門牌會 MISS）；稅籍地址須清洗（全形、里鄰、截到「號」）
-├── web/ui.js     四頁共用骨架。核心是 `TW.page({needs, ready, clear, render})`：
+├── web/ui.js     五頁共用骨架。核心是 `TW.page({needs, ready, clear, render})`：
 │                 主題套用（在 <head> 同步跑，否則先亮後暗閃一下）、payload 讀取與
 │                 完整性判斷（needs 的鍵要存在，陣列還要非空）、**錯誤圍堵**——沒有
 │                 這層的話 render 中途 throw 會留下已清空的容器，畫面與「找不到
 │                 data.js」無法區分。順帶帶進 esc/nt/css/el/themeButton/catColors。
 │                 **是全域 TW 不是 ES module**：file:// 下 import 走 CORS 會被擋，
 │                 與 data.js 不走 fetch 同一個理由（ADR-0002）。別「現代化」
-├── web/ui.css    四頁共用色票與文件版面。只收「在有定義的頁逐字相同、且沒定義的
+├── web/ui.css    五頁共用色票與文件版面。只收「在有定義的頁逐字相同、且沒定義的
 │                 頁不受影響」的規則。「不受影響」要查兩條路徑：CSS 的 var(--x) 與
 │                 **JS 的 getComputedStyle().getPropertyValue("--x")**（地圖的分類色
 │                 就是後者取的），只查 var() 會漏。刻意留各頁：--warning（dashboard
 │                 與 fda 值不一致）、--serious（只有 dashboard 且沒人用）、--event
 │                 （只有食安頁用）、body/button.theme/h1（地圖是全視窗版面）
 ├── web/dashboard.html  月報模板（零相依 SVG 圖表、hover tooltip、亮暗切換鈕
-│                 localStorage twcrawl-theme 三頁共用；分類趨勢＝小倍數折線，
+│                 localStorage twcrawl-theme 各頁共用；分類趨勢＝小倍數折線，
 │                 一分類一格、y 刻度各自獨立（分類金額差一個量級，共用刻度會把
 │                 小分類壓成平線）；FDA 命中明細卡；非必要表
 │                 只列近 10 筆其餘導查詢頁；調色盤 6 色槽過 dataviz 驗證器兩模式）
@@ -531,6 +531,13 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   ——fixture 給珍奶測試店座標讓地圖有兩點（golden：1→2 家）。新增互動
   測試五步（基線 2、搜剩 1、清空回 2、搜∩圖例=0、搜∩時間=0）。
   測試 55→56
+- ✅ README 與詞彙收尾（2026-08-01，issue #16；2026-08 優化輪 #8 至此七張
+  全結）：README 定位改「個人消費資料庫」、三頁→五頁、測試數 47→56、
+  補預算/趨勢圖/年度回顧/地圖搜尋/狀態顯示段落、新增 lottery 小節（原本
+  完全沒寫）、產出表補 year.html 與 budget.local.json；CONTEXT.md 新增
+  「預算」「年度回顧」詞條、儀表板/食安頁詞條四頁→五頁。程式註解與
+  CLAUDE.md 現在式的四頁字樣一併掃成五頁（歷史 ✅ 條目描述當時狀態，
+  不改）。零程式行為變動
 - ⬜ 緩辦（要做先問）：CSV 匯出（分類趨勢圖已做＝#11；地圖店家搜尋立案為 #15）
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

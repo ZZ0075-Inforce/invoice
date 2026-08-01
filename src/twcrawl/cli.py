@@ -92,7 +92,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_exp = sub.add_parser(
         "export",
-        help="從資料庫衍生四頁（月報、查詢、食安、地圖 + data.js）",
+        help="從資料庫衍生五頁（月報、查詢、食安、年度回顧、地圖 + data.js）",
     )
     p_exp.add_argument("--no-open", action="store_true", help="產出後不自動開啟儀表板")
 

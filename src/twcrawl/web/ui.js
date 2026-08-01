@@ -1,11 +1,11 @@
-/* twcrawl 四頁共用的頁面骨架與小工具。
+/* twcrawl 五頁共用的頁面骨架與小工具。
 
    為什麼是全域 `TW` 而不是 ES module：檢視路徑要能 file:// 開檔即用
    （ADR-0002），而瀏覽器對 file:// 頁面的 `import` 走 CORS 會被擋——這跟
    data.js 當初不走 fetch 而走 <script src> 是同一個理由。別「現代化」成
    `<script type="module">`，那會讓雙擊開檔的路徑整個壞掉。
 
-   核心是 TW.page()：四頁的開場白本來各寫一份，而且四份的「payload 可用嗎」
+   核心是 TW.page()：各頁的開場白本來各寫一份，而且每份的「payload 可用嗎」
    判準都不一樣；更要緊的是四份都沒有錯誤圍堵——render 中途 throw 會留下一個
    已清空的容器，畫面與「找不到 data.js」無法區分。
 */
