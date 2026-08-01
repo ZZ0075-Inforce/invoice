@@ -1279,7 +1279,8 @@ def test_restore_roundtrip_refuses_clobber_and_state():
 
         pack = bk.make_backup("pw123", src, out_dir=td / "packs")
         before = db_stats(src)
-        assert before == {"invoices": 2, "items": 1, "last": "2026-06-02"}, before
+        assert (before.invoices, before.items, before.last) == \
+            (2, 1, "2026-06-02"), before
 
         # -- 換機：空目錄還原 -------------------------------------------------
         dst = Workspace(td / "dst")
@@ -1294,7 +1295,11 @@ def test_restore_roundtrip_refuses_clobber_and_state():
         assert not dst.state.exists(), "還原不該生出 state/（登入 cookie）"
 
         # -- 已經有資料就不默默覆蓋 -------------------------------------------
-        assert bk.existing_data(dst), "還原過的工作區當然算「已經有資料」"
+        # 覆蓋偵測的範圍必須由 _targets() 導出。手打第二份清單的話，備份日後
+        # 多收一個東西這裡會靜默漏掉——而這條分支漏掉就是默默蓋掉使用者資料
+        assert bk.existing_data(dst) == [p for p in bk._targets(dst)
+                                         if p.exists()], \
+            "existing_data 要涵蓋 _targets 裡每一個真的存在的東西"
         fails_with(lambda: cmd_restore(dst, pack, "pw123"), "已經有資料")
         forced = cmd_restore(dst, pack, "pw123", force=True)
         assert forced["verify"] == before, "--force 要真的還原"
@@ -1312,6 +1317,13 @@ def test_restore_roundtrip_refuses_clobber_and_state():
             zf.writestr("readme.txt", "不是備份包")
         fails_with(lambda: cmd_restore(fresh, plain, "pw123"),
                    "不是 twcrawl 備份包")
+
+        # 資料庫還不存在時 backup 也會產出一個只有個人設定的**合法**包，
+        # 所以「沒有資料庫」不可以說成「不是 twcrawl 備份包」——那句話是假的
+        nodb = td / "nodb.zip"
+        with pyzipper.AESZipFile(nodb, "w") as zf:
+            zf.writestr("budget.local.json", "{}")
+        fails_with(lambda: cmd_restore(fresh, nodb, "pw123"), "沒有資料庫")
 
         # 包內路徑是不可信輸入：`..` 不能把檔案寫到工作區外
         slip = td / "slip.zip"

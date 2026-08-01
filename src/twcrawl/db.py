@@ -1,8 +1,9 @@
 """SQLite 儲存層。所有寫入都是 upsert，重跑不會產生重複資料。
 
 讀取面只收「不只一個 caller 要」的那幾種：發票與品項的過濾讀取（export／
-lottery／match 共用同一份條件）、稅籍登記的讀寫。一次性的聚合查詢（FDA 來源
-統計、常買品項 top3）留在原地——搬進來只是把 SQL 換個地方放。
+lottery／match 共用同一份條件）、全庫筆數與最新日期（update 與 restore 都要）、
+稅籍登記的讀寫。一次性的聚合查詢（FDA 來源統計、常買品項 top3）留在原地——
+搬進來只是把 SQL 換個地方放。
 """
 
 from __future__ import annotations
@@ -134,6 +135,26 @@ class Item(NamedTuple):
     qty: float | None
     price: float | None
     amount: float | None
+
+
+class Stats(NamedTuple):
+    """庫內有多少東西、資料新到哪一天。`last` 在空庫是 None。"""
+    invoices: int
+    items: int
+    last: str | None
+
+
+def stats(conn: sqlite3.Connection) -> Stats:
+    """全庫的筆數與最新發票日期。
+
+    `max(inv_date)` 本來是 update 組步驟時的一次性查詢；restore 的還原後驗證
+    也要它，兩個 caller 就該收進來（本模組開頭的判準）。順帶讓 commands.py
+    完全不含 SQL。
+    """
+    return Stats(*conn.execute(
+        "select (select count(*) from invoices),"
+        " (select count(*) from invoice_items),"
+        " (select max(inv_date) from invoices)").fetchone())
 
 
 class Biz(NamedTuple):

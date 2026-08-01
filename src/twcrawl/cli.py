@@ -208,7 +208,7 @@ def _dispatch(args: argparse.Namespace, ws: Workspace) -> int:
         pw = commands.backup_password()
         if not pw:
             raise SystemExit("需要備份密碼（互動輸入或設 TWCRAWL_BACKUP_PASSWORD）。")
-        commands.cmd_backup(pw, ws, out_dir=args.out)
+        commands.cmd_backup(ws, pw, out_dir=args.out)
         return 0
 
     if args.cmd == "restore":

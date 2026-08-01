@@ -186,17 +186,17 @@ def cmd_export(conn, ws: Workspace, *, open_browser: bool = True) -> dict:
     return {"dashboard": str(dash)}
 
 
-def cmd_backup(password: str, ws: Workspace, *,
+def cmd_backup(ws: Workspace, password: str, *,
                out_dir: Path | str | None = None) -> dict:
     path = backup_mod.make_backup(password, ws, out_dir=out_dir)
     return {"path": str(path)}
 
 
-def db_stats(ws: Workspace) -> dict:
-    """打開資料庫數一數，順便證明它真的打得開。
+def db_stats(ws: Workspace) -> db.Stats:
+    """打開工作區的資料庫數一數，順便證明它真的打得開。
 
     只回筆數與日期：金額與店家名是消費紀錄，不進終端機輸出
-    （CLAUDE.md 個資界線）。
+    （CLAUDE.md 個資界線）。這裡負責的是「開得開嗎」——查詢本身在 db.stats。
     """
     try:
         conn = db.connect(ws.db)
@@ -205,13 +205,9 @@ def db_stats(ws: Workspace) -> dict:
             f"資料庫打不開（{ws.db}）：{e}\n"
             "  → 檔案可能損毀，換一個備份包再試。") from None
     try:
-        rows = conn.execute(
-            "select (select count(*) from invoices),"
-            " (select count(*) from invoice_items),"
-            " (select max(inv_date) from invoices)").fetchone()
+        return db.stats(conn)
     finally:
         conn.close()  # Windows：開著的連線會擋住目錄清理
-    return {"invoices": rows[0], "items": rows[1], "last": rows[2]}
 
 
 def cmd_restore(ws: Workspace, archive: Path | str, password: str, *,
@@ -226,15 +222,15 @@ def cmd_restore(ws: Workspace, archive: Path | str, password: str, *,
 
 
 def format_restore(res: dict) -> str:
-    v = res["verify"]
+    v: db.Stats = res["verify"]
     return "\n".join([
         "\n=== 還原完成 ===",
         f"  備份包：{res['archive']}",
         f"  還原 {res['files']} 個檔案（{res['bytes'] / 1_048_576:.1f} MB）"
         f"到 {res['root']}",
         f"  資料庫：{res['db']}",
-        f"    發票 {v['invoices']} 張、明細 {v['items']} 列",
-        f"    最新發票日期：{v['last'] or '（庫內沒有發票）'}",
+        f"    發票 {v.invoices} 張、明細 {v.items} 列",
+        f"    最新發票日期：{v.last or '（庫內沒有發票）'}",
         "  → 登入狀態不在備份包內（ADR-0001），"
         "要抓新資料請先 `twcrawl login`。",
         "  → 現在可以 `twcrawl export` 開儀表板確認。",
@@ -304,8 +300,7 @@ def update_steps(conn, ws: Workspace, *, login: bool = True,
     所以這個函式是純的：給定選項就決定了哪幾步會跑、標籤長什麼樣。
     """
     today = today or _dt.date.today()
-    last = conn.execute("select max(inv_date) from invoices").fetchone()[0]
-    d_from, d_to = auto_month_range(last, today)
+    d_from, d_to = auto_month_range(db.stats(conn).last, today)
     since = (today - _dt.timedelta(days=FDA_LOOKBACK_DAYS)).isoformat()
 
     if not backup:
@@ -315,7 +310,7 @@ def update_steps(conn, ws: Workspace, *, login: bool = True,
             "backup",
             skip_reason="沒有密碼來源（非互動且未設 TWCRAWL_BACKUP_PASSWORD）")
     else:
-        backup_step = Step("backup", lambda: cmd_backup(password, ws))
+        backup_step = Step("backup", lambda: cmd_backup(ws, password))
 
     return [
         Step("login（請在瀏覽器完成登入）",

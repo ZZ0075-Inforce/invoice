@@ -19,8 +19,9 @@ import pyzipper
 
 from .workspace import Workspace
 
-# state/ 是 ADR-0001 的紅線：備份不收、還原也不生。兩端比對的是同一個名字。
-STATE_DIRNAME = "state"
+# 落地路徑越界的說法只有一份：`_entry_problem` 與 restore 的第二層防護會各講
+# 一次，字面分兩份的話改一邊就漂。
+OUT_OF_ROOT = "包內路徑會寫到工作區外"
 
 
 def _targets(ws: Workspace) -> list[Path]:
@@ -66,8 +67,10 @@ def make_backup(
         raise SystemExit(
             "沒有可備份的資料（資料庫、captures/ 與個人設定都不存在）。")
     for f in files:
-        if STATE_DIRNAME in f.parts:
-            raise AssertionError(f"備份絕不收 state/：{f}")
+        # 目錄名問 Workspace，不要在這裡再寫一份字面：改了那邊而這裡沒跟上，
+        # 失敗的方式是登入 cookie 靜靜進了可上雲的包（ADR-0001）
+        if ws.state.name in f.parts:
+            raise AssertionError(f"備份絕不收 {ws.state.name}/：{f}")
 
     out_dir = Path(out_dir) if out_dir else ws.backup
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -91,41 +94,45 @@ def make_backup(
 
 # ---- 還原 ----------------------------------------------------------------
 
-def _entry_problem(name: str, prefixes: tuple[str, ...]) -> str | None:
+def _entry_problem(name: str, prefixes: tuple[str, ...],
+                   state_dir: str) -> str | None:
     """這個包內路徑不能還原的理由；None 代表可以。
 
     還原是「把一個外來的 zip 解進工作區」，所以包內路徑要當成不可信的輸入
     看：`..` 與絕對路徑會把檔案寫到工作區外，`state/` 則是 ADR-0001 的紅線。
     最後那條前綴比對同時也是「這是不是 twcrawl 備份包」的判準——備份收什麼、
     還原就只認什麼。
+
+    `state_dir` 與 prefixes 都由呼叫端從 Workspace 推出，這個函式不自己記
+    任何路徑字面。
     """
     if name.endswith("/"):
         return None  # 目錄項目沒有內容，目錄由檔案項目自己建
     p = PurePosixPath(name)
     if not p.parts or p.is_absolute() or ".." in p.parts:
-        return "包內路徑會寫到工作區外"
-    if STATE_DIRNAME in p.parts:
-        return "包內含 state/（登入 cookie 永不備份，見 docs/adr/0001）"
+        return OUT_OF_ROOT
+    if state_dir in p.parts:
+        return f"包內含 {state_dir}/（登入 cookie 永不備份，見 docs/adr/0001）"
     if not any(name == pre or name.startswith(pre + "/") for pre in prefixes):
         return "不是備份包會有的內容"
     return None
 
 
-def existing_data(ws: Workspace) -> list[str]:
+def _has_content(p: Path) -> bool:
+    return p.is_file() or (p.is_dir() and any(f.is_file() for f in p.rglob("*")))
+
+
+def existing_data(ws: Workspace) -> list[Path]:
     """工作區裡已經有、還原會蓋掉的東西。空清單代表可以直接還原。
 
     看的是「工作區有沒有資料」而不是「哪幾個檔會相撞」：把舊備份包還原到
     有新資料的工作區，就算檔名一個都沒撞上也是一場災難。
+
+    範圍由 `_targets()` 導出而不是另外列一份。同一份清單手打第二次的話，
+    備份日後多收一個東西時這裡會**靜默**漏掉它——而這條分支漏掉的後果，
+    正好就是默默蓋掉使用者的資料。
     """
-    found = []
-    if ws.db.exists():
-        found.append(f"資料庫（{ws.db}）")
-    if ws.captures.is_dir() and any(p.is_file() for p in ws.captures.rglob("*")):
-        found.append(f"擷取結果（{ws.captures}）")
-    for p in (ws.rules, ws.budget):
-        if p.exists():
-            found.append(f"個人設定（{p.name}）")
-    return found
+    return [p for p in _targets(ws) if _has_content(p)]
 
 
 def restore_backup(archive: Path | str, password: str, ws: Workspace, *,
@@ -143,14 +150,18 @@ def restore_backup(archive: Path | str, password: str, ws: Workspace, *,
         raise SystemExit(
             f"{archive} 是目錄——請指定備份包檔案（twcrawl-backup-*.zip）。")
     if not archive.exists():
-        raise SystemExit(f"找不到備份包：{archive}")
+        raise SystemExit(
+            f"找不到備份包：{archive}\n"
+            "  → 確認路徑；備份包預設產在工作區的 out/backup/，"
+            "檔名長得像 twcrawl-backup-20260802-0029.zip。")
 
     if not force:
         have = existing_data(ws)
         if have:
+            # 印相對路徑：絕對路徑會把訊息撐到看不出重點，而目前目錄就在下一行
+            listed = "、".join(p.relative_to(ws.root).as_posix() for p in have)
             raise SystemExit(
-                "這個工作區已經有資料，還原會覆蓋："
-                f"{'、'.join(have)}\n"
+                f"這個工作區已經有資料，還原會覆蓋：{listed}\n"
                 f"  目前目錄：{ws.root}\n"
                 "  → 換到空目錄再還原（cd 過去再跑），"
                 "或確定要覆蓋就加 --force。")
@@ -170,13 +181,19 @@ def restore_backup(archive: Path | str, password: str, ws: Workspace, *,
         zf.setpassword(password.encode("utf-8"))
         names = zf.namelist()
         for name in names:
-            why = _entry_problem(name, prefixes)
+            why = _entry_problem(name, prefixes, ws.state.name)
             if why:
-                raise SystemExit(f"這不是 twcrawl 備份包——{why}：{name}")
+                raise SystemExit(
+                    f"這不是 twcrawl 備份包——{why}：{name}\n"
+                    "  → 只有 `twcrawl backup` 產生的包能還原；"
+                    "手工壓的 zip 不行。")
         files = [n for n in names if not n.endswith("/")]
         if db_entry not in files:
+            # 刻意不說「不是 twcrawl 備份包」——資料庫還不存在時 backup 也會
+            # 產出一個只有個人設定的合法包，那句話會是假的
             raise SystemExit(
-                f"這不是 twcrawl 備份包——裡面沒有 {db_entry}。")
+                f"這個備份包裡沒有資料庫（{db_entry}），還原了也沒有東西可用。\n"
+                "  → 換一個備份包；有資料時產生的包一定含資料庫。")
 
         # 落地路徑也在前置階段算完並檢查。這道 resolve() 是 `_entry_problem`
         # 的第二層（字串比對萬一有洞，實際路徑不會騙人）；放在解壓迴圈裡的話
@@ -185,7 +202,7 @@ def restore_backup(archive: Path | str, password: str, ws: Workspace, *,
         for name in files:
             dest = ws.root / name
             if ws.root.resolve() not in dest.resolve().parents:
-                raise SystemExit(f"包內路徑會寫到工作區外：{name}")
+                raise SystemExit(f"{OUT_OF_ROOT}：{name}")
             dests.append((name, dest))
 
         # 密碼在這裡就試，不要解到一半才發現。AES 的密碼驗證值在 open()
@@ -195,7 +212,10 @@ def restore_backup(archive: Path | str, password: str, ws: Workspace, *,
                 fh.read(1)
         except RuntimeError as e:
             if "password" in str(e).lower():
-                raise SystemExit("密碼錯誤，解不開這個備份包。") from None
+                raise SystemExit(
+                    "密碼錯誤，解不開這個備份包。\n"
+                    "  → 就是產生這個包時輸入的那組密碼；"
+                    "也可以設 TWCRAWL_BACKUP_PASSWORD 免互動輸入。") from None
             raise SystemExit(f"解不開這個備份包：{e}") from None
 
         total = 0
