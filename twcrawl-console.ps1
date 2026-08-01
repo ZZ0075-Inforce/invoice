@@ -21,8 +21,9 @@ $twcrawl = Join-Path $PSScriptRoot '.venv\Scripts\twcrawl.exe'
 function Wait-Then-Exit([int]$code) {
     Write-Host ''
     Write-Host '按 Enter 關閉這個視窗…' -ForegroundColor DarkGray
-    # 從捷徑雙擊時沒有人接手輸出，直接結束就什麼都來不及看
-    [void](Read-Host)
+    # 從捷徑雙擊時沒有人接手輸出，直接結束就什麼都來不及看。
+    # 非互動地被呼叫時（測試、管線）讀不到輸入，不要因此炸掉結束碼
+    try { [void](Read-Host) } catch { }
     exit $code
 }
 
@@ -39,6 +40,45 @@ if (-not (Test-Path -LiteralPath $twcrawl)) {
     Write-Host "目前所在目錄：$PSScriptRoot"
     Wait-Then-Exit 1
 }
+
+# 備份密碼在這裡問一次。控制台啟動的工作是子行程，而且 stdin 是斷開的
+# （不斷開的話，「每月例行」的備份會停在沒人看的視窗上等輸入），所以密碼
+# 只能靠環境變數傳進去——不在這裡問，從控制台跑的例行就永遠不會產生備份包。
+# 留空＝這輪不備份：update 的備份那一步會以人話跳過，其餘照跑。
+if ($env:TWCRAWL_BACKUP_PASSWORD) {
+    Write-Host '備份密碼：沿用已設定的環境變數。' -ForegroundColor DarkGray
+} elseif ([Console]::IsInputRedirected) {
+    # 沒有主控台可問（從管線或測試啟動）。`Read-Host -AsSecureString` 讀的是
+    # 主控台而不是 stdin，在這種情形會**直接卡住不動**——所以這裡不問，
+    # 照樣往下走，只是這輪不會備份
+    Write-Host '未設定備份密碼：每月例行會跳過備份那一步（其餘照跑）。' -ForegroundColor DarkGray
+} else {
+    # 整段包在 try 裡：備份密碼是選配的，問它的過程出任何差錯都不該讓
+    # 控制台開不起來（$ErrorActionPreference = 'Stop' 會讓例外直接收掉腳本）
+    $ok = $false
+    try {
+        $sec = Read-Host -AsSecureString '備份密碼（直接按 Enter 就跳過備份）'
+        if ($sec -and $sec.Length -gt 0) {
+            # SecureString 轉回明文才進得了環境變數；用完立刻釋放那段記憶體
+            $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+            try {
+                $env:TWCRAWL_BACKUP_PASSWORD = `
+                    [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+            } finally {
+                [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+            }
+            $ok = $true
+        }
+    } catch {
+        Write-Host "（問備份密碼時出錯：$($_.Exception.Message)）" -ForegroundColor DarkGray
+    }
+    if ($ok) {
+        Write-Host '已設定備份密碼：控制台跑的「每月例行」會產生備份包。' -ForegroundColor DarkGray
+    } else {
+        Write-Host '未設定備份密碼：每月例行會跳過備份那一步（其餘照跑）。' -ForegroundColor DarkGray
+    }
+}
+Write-Host ''
 
 Write-Host '正在啟動 twcrawl 控制台…瀏覽器會自己打開。'
 Write-Host ''

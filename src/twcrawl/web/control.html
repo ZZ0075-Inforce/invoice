@@ -140,8 +140,9 @@
     <p class="note">
       「每月例行」＝登入 → 抓發票 → 食安清單 → 比對 → 對獎 → 報表 → 備份。
       一步失敗會記錄下來、其餘照跑，結尾有彙總。
-      備份那一步需要事先設好環境變數 <code>TWCRAWL_BACKUP_PASSWORD</code>，
-      否則會以人話跳過（控制台不收密碼）。
+      備份那一步需要密碼，而<b>控制台不收密碼</b>：由啟動器
+      （<code>twcrawl-console.bat</code>）在開站時問一次，或自己先設好環境變數
+      <code>TWCRAWL_BACKUP_PASSWORD</code>。都沒有的話備份會以人話跳過。
     </p>
   </div>
 </div>

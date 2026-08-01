@@ -16,7 +16,7 @@ FDA 目前接三個來源：中聯油脂案專區強制下架清單（edible_oil
 ```
 pip install -e .                      # 一律 editable；PyPI 上的 twcrawl 是無關的舊套件
 python -m playwright install chromium # playwright 指令找不到時用這個
-python tests/test_twcrawl.py          # 測試（68/68，不用 pytest）
+python tests/test_twcrawl.py          # 測試（69/69，不用 pytest）
 python tests/test_twcrawl.py --update-golden   # 有意改動五頁畫面後重生 tests/golden/
 
 # 每月例行（一鍵；fetch 區間自動推算、FDA 回溯 90 天只給 feed 型來源）
@@ -235,7 +235,9 @@ src/twcrawl/
 │                 才一次冒出來）、TWCRAWL_DONE_FILE（登入改等訊號檔）。
 │                 **stdin 一定要 DEVNULL**：serve 從終端機起的話子行程會繼承那個
 │                 tty，update 的備份密碼 getpass 就停在沒人看的視窗上等輸入，
-│                 控制台永遠顯示「執行中」；斷開之後那一步以人話跳過。
+│                 控制台永遠顯示「執行中」；斷開之後那一步以人話跳過。密碼因此
+│                 只能走環境變數——由啟動器開站時問一次（見 twcrawl-console.ps1），
+│                 serve 起的每個工作都繼承；控制台頁本身不收密碼。
 │                 中止走 `_kill_tree`（Windows taskkill /T、POSIX killpg）——
 │                 `terminate()` 只殺得到直接的子行程，長工底下的 Chromium 會變成
 │                 孤兒。`attach()` 的回傳值是「中止比 Popen 早一步」那個競態的
@@ -769,6 +771,16 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   的 ws 參數（同層 `cmd_*` 一致）、`serve(page=...)` 收字串（`--control` 布林
   已在 cli，改了只是換地方複雜）、以及「登入按鈕算 scope creep」——它是 token
   過期時「重跑 login」那句話的唯一出口。測試 67→68
+- ✅ 啟動器問一次備份密碼（2026-08-02，接在 #22 review 之後，無票）：控制台跑
+  的「每月例行」原本**預設不會產生備份包**——工作是子行程且 stdin 斷開（不斷
+  開會卡在沒人看的 getpass 上），沒有密碼來源就跳過，而那只在摘要裡一行。
+  改由 `twcrawl-console.ps1` 開站時問一次（留空＝跳過），密碼只放進那個視窗的
+  環境變數，serve 起的工作都繼承。**上雲仍由使用者自己處理**（2026-08-02 拍板，
+  不要再提議自動同步）。實作上有一個非做不可的判斷：`Read-Host -AsSecureString`
+  讀的是**主控台不是 stdin**，從管線／排程啟動時會直接卡住不動——所以先問
+  `[Console]::IsInputRedirected`，問不到就不問、照常啟動（測試釘住這條，
+  沒有它整支測試會逾時）。互動那條分支另外包 try/catch：選配功能出錯不該讓
+  控制台開不起來。測試 68→69
 - ⬜ 緩辦（要做先問）：CSV 匯出（分類趨勢圖已做＝#11；地圖店家搜尋立案為 #15）
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

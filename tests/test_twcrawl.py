@@ -1856,6 +1856,9 @@ def test_launcher_explains_missing_venv():
         print("✓ 一鍵啟動器：非 Windows，只驗了編碼")
         return
 
+    # 順帶釘住順序：venv 檢查在問密碼之前。反過來的話，這支測試（stdin 是
+    # DEVNULL）會卡在提示上——不在工作區的人也不該先被問密碼。
+
     with TemporaryDirectory() as td:
         td = Path(td)
         for name in ("twcrawl-console.bat", "twcrawl-console.ps1"):
@@ -1871,6 +1874,56 @@ def test_launcher_explains_missing_venv():
     assert "找不到" in out and "虛擬環境" in out, \
         f"該給人話提示且中文未被 cmd 的 codepage 切壞，實際輸出：{out!r}"
     print("✓ 一鍵啟動器：缺 venv 給人話並回非零（中文未被 cmd 解析壞）")
+
+
+def test_launcher_asks_backup_password_once():
+    """啟動器問一次備份密碼，之後控制台起的工作都繼承。
+
+    這是「從控制台跑的每月例行會不會產生備份包」的唯一開關：工作是子行程且
+    stdin 斷開（不斷開的話備份會停在沒人看的 getpass 上），密碼只能靠環境
+    變數傳進去。不在啟動器問，控制台就永遠不會備份——而那是**靜默**的，
+    只有摘要裡一行「跳過」。留空要能照樣啟動，不是要求非填不可。
+    """
+    import os
+    import shutil
+    import subprocess
+
+    if sys.platform != "win32":
+        print("✓ 啟動器備份密碼：非 Windows，略過")
+        return
+
+    root = Path(__file__).resolve().parent.parent
+    with TemporaryDirectory() as td:
+        td = Path(td)
+        for name in ("twcrawl-console.bat", "twcrawl-console.ps1"):
+            shutil.copyfile(root / name, td / name)
+        # 假的 venv：只要讓 venv 檢查過關、走到問密碼那一步。這個 exe 起不來
+        # 或吃不了 `serve --control` 都無所謂，啟動器會走失敗那條路收尾
+        scripts = td / ".venv" / "Scripts"
+        scripts.mkdir(parents=True)
+        shutil.copyfile(sys.executable, scripts / "twcrawl.exe")
+
+        def run(env: dict | None = None) -> str:
+            p = subprocess.run(
+                [str(td / "twcrawl-console.bat")], cwd=str(td),
+                input="\n", capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=180,
+                env={**os.environ, **(env or {})})
+            return p.stdout + p.stderr
+
+        # 沒有主控台可問時（管線、測試）**不可以卡住**：
+        # `Read-Host -AsSecureString` 讀的是主控台不是 stdin，沒有這道判斷
+        # 就會停在提示上不動——這支測試會逾時，而使用者從排程叫它也會中招
+        skipped = run()
+        assert "未設定備份密碼" in skipped, \
+            f"問不到密碼時要照樣啟動並說清楚這輪不備份，實際輸出：{skipped!r}"
+
+        # 已經設好環境變數的人不該再被問一次（也不該被覆蓋掉）
+        reused = run({"TWCRAWL_BACKUP_PASSWORD": "hunter2"})
+        assert "沿用已設定的環境變數" in reused, \
+            f"環境變數已設就沿用，實際輸出：{reused!r}"
+        assert "hunter2" not in reused, "密碼不可以被印出來"
+    print("✓ 啟動器：備份密碼問一次（問不到不卡住、已設定就沿用、不回顯）")
 
 
 def test_jobs_runner_recovers_when_job_cannot_start():
