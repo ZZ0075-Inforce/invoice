@@ -161,6 +161,7 @@ TW.page({
     for (const k in markerByName) delete markerByName[k];
     const pts = [];
     const noGeo = [];
+    let shownSum = 0;   // 畫上地圖的金額（stat 用，跟著所有過濾走）
     const max = Math.max(1, ...Object.values(agg).map(a => a.total));
     for (const [name, a] of Object.entries(agg).sort((x, y) => y[1].total - x[1].total)) {
       const m = meta[name];
@@ -173,7 +174,8 @@ TW.page({
         radius: r, color: "#fff", weight: 2,          // 2px surface ring
         fillColor: catColor(m.category), fillOpacity: 0.85,
       });
-      mk.bindTooltip(`${m.name}・${nt(a.total)}`);
+      // Leaflet 的字串 tooltip 走 innerHTML，店名一樣要 esc
+      mk.bindTooltip(`${esc(m.name)}・${nt(a.total)}`);
       mk.bindPopup(
         `<b>${esc(m.name)}</b>` +
         (m.legal ? `<br>${esc(m.legal)}` : "") +
@@ -186,18 +188,18 @@ TW.page({
       mk.addTo(layer);
       markerByName[m.name] = mk;
       pts.push([m.lat, m.lon]);
+      shownSum += a.total;
     }
     if (pts.length && !fitted) {
       map.fitBounds(pts, { padding: [30, 30], maxZoom: 15 });
       fitted = true;
     }
 
-    const geoSum = Object.entries(agg)
-      .filter(([n]) => meta[n] && meta[n].lat != null)
-      .reduce((s, [, a]) => s + a.total, 0);
+    // 「地圖顯示 N 家（金額）」由實際畫出的圓點累計——以前另外聚合，
+    // 不吃圖例隱藏也不吃搜尋，家數過濾了金額卻沒跟上
     document.getElementById("stat").textContent =
       `${mFrom.value || "…"} ～ ${mTo.value || "…"}：${inRange} 張發票・${nt(sum)}` +
-      `・地圖顯示 ${pts.length} 家（${nt(geoSum)}）`;
+      `・地圖顯示 ${pts.length} 家（${nt(shownSum)}）`;
 
     const ng = document.getElementById("nogeo");
     ng.innerHTML = noGeo.length

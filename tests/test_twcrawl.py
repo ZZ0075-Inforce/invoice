@@ -2448,6 +2448,12 @@ def test_pages_survive_hostile_and_edge_payloads():
                       {clientX: 20, clientY: 20, bubbles: true}));
                   for (const tr of document.querySelectorAll("tr.inv"))
                     tr.click();
+                  // 地圖 marker 的 tooltip 是 hover 才進 DOM（Leaflet 字串
+                  // tooltip 走 innerHTML），要派 mouseover 才驗得到跳脫
+                  for (const p of document.querySelectorAll(
+                      "#map path.leaflet-interactive"))
+                    p.dispatchEvent(new MouseEvent("mouseover",
+                      {bubbles: true}));
                 }""")
                 n = page.evaluate(
                     "document.querySelectorAll('twcrawl-xss').length")
@@ -2687,6 +2693,11 @@ def test_map_seller_search():
         mTo.dispatchEvent(new Event("change", { bubbles: true }));
         return count();
       }
+      if (step === "hostile") {   // 搜尋框輸入惡意字串：只比對、不進 DOM
+        type('<twcrawl-xss></twcrawl-xss>"');
+        return count() +
+          document.querySelectorAll("twcrawl-xss").length * 100;
+      }
     }"""
     with TemporaryDirectory() as td:
         out = _stage_pages(Workspace(Path(td)), a_payload())
@@ -2699,9 +2710,16 @@ def test_map_seller_search():
                     ("search", 1, "搜「超市」應剩 1 點"),
                     ("clear", 2, "清空搜尋應回復 2 點"),
                     ("legend", 0, "搜「珍奶」∩圖例隱藏手搖飲應為 0"),
-                    ("time", 0, "搜「珍奶」∩區間 2026-03 應為 0（該月無其發票）")):
+                    ("time", 0, "搜「珍奶」∩區間 2026-03 應為 0（該月無其發票）"),
+                    ("hostile", 0, "搜尋字串不得進 DOM（xss 計 100/個）")):
                 got = page.evaluate(js, step)
                 assert got == want, f"{why}，實得 {got}"
+                if step == "search":
+                    stat = page.evaluate(
+                        "document.getElementById('stat').textContent")
+                    assert "1 家（NT$500）" in stat, (
+                        "stat 的家數與金額要一起跟著過濾走（超市 4-6月 "
+                        f"200+300=500），實得 {stat!r}")
             page.close()
     print("✓ 地圖店家搜尋：輸入過濾、與圖例/時間交集、清空恢復")
 
