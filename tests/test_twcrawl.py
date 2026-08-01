@@ -1519,10 +1519,13 @@ def test_export_items_and_query_page():
             assert row["num"] == "DD1", "發票列應帶發票號碼（查詢頁對帳用）"
             assert row["items"][0]["desc"] == "珍珠鮮奶茶"
             assert row["items"][0]["price"] == 60.0
-            # 狀態翻中文（issue #14）：已收錄→中文；未收錄→原始碼不吞資訊
-            assert row["status"] == "開立", row["status"]
+            # 狀態翻中文（issue #14）：已收錄→中文；未收錄→原始碼不吞資訊；
+            # 常態與否由匯出端旗標（頁面不解讀譯文）
+            assert row["status"] == "開立" and not row["statusFlagged"], row
             assert payload["invoices"][1]["status"] == "INVOICE0042X", \
                 "未收錄的狀態碼要原樣進 payload，不是 None 也不是空字串"
+            assert payload["invoices"][1]["statusFlagged"], \
+                "未收錄碼是非常態，statusFlagged 要為真（列上才會標）"
             assert "SECRET99" not in json.dumps(payload, ensure_ascii=False), \
                 "載具號碼永不進 data.js（ADR-0002）"
 
@@ -2064,11 +2067,12 @@ def a_payload(**overrides) -> dict:
         ("AA9", "2026-06-05", "珍奶測試店", "手搖飲", 60.0, [("珍珠鮮奶茶", 60.0)]),
     ]
     # 狀態（issue #14）：多數「開立」；AA2 給 None（CSV 舊來源沒有狀態）、
-    # AA7 給未收錄碼——原始碼要照樣顯示，不吞資訊
+    # AA7 給未收錄碼——原始碼要照樣顯示，不吞資訊。statusFlagged 由匯出端
+    # 決定（常態與否是 Python 的事實，頁面只讀旗標）
     status = {"AA2": None, "AA7": "INVOICE0099X"}
     invoices = [
         {"num": n, "date": d, "seller": s, "category": c, "amount": a,
-         "status": status.get(n, "開立"),
+         "status": status.get(n, "開立"), "statusFlagged": n == "AA7",
          "items": [{"desc": desc, "qty": 1, "price": amt, "amount": amt}
                    for desc, amt in items]}
         for n, d, s, c, a, items in inv
@@ -2622,6 +2626,39 @@ def test_dashboard_budget_tile():
                             f"{name}：磚上少了「{want}」——實得 {r['text']!r}")
                 page.close()
     print("✓ 預算磚：雙預算 45%＋失守月份點名、只設上限 120%、沒設定就沒磚")
+
+
+def test_query_status_display():
+    """發票狀態顯示（issue #14）：常態不佔列上版面、非常態標原始碼、
+    展開明細一律有中文狀態行。golden 不點列，這裡直接驗 DOM。"""
+    from twcrawl.workspace import Workspace
+
+    js = """() => {
+      const rows = [...document.querySelectorAll("tr.inv")];
+      const byNum = t => rows.find(r => r.textContent.includes(t));
+      const aa1 = byNum("AA1"), aa7 = byNum("AA7");
+      aa1.click();
+      const detail = aa1.nextElementSibling.textContent;
+      return {
+        aa1Badge: !!aa1.querySelector(".st-mark"),
+        aa7Badge: (aa7.querySelector(".st-mark") || {}).textContent || null,
+        detail,
+      };
+    }"""
+    with TemporaryDirectory() as td:
+        out = _stage_pages(Workspace(Path(td)), a_payload())
+        with browser_context(session_file=None, headed=False) as ctx:
+            _stub_tiles(ctx)
+            page, errs = _open(ctx, out, "query.html")
+            assert not errs, f"query：{errs}"
+            r = page.evaluate(js)
+            assert not r["aa1Badge"], "常態「開立」不該在列上長徽章"
+            assert r["aa7Badge"] == "（INVOICE0099X）", (
+                f"未收錄碼要在列上原樣標註，實得 {r['aa7Badge']!r}")
+            assert "發票狀態：開立" in r["detail"], (
+                f"展開明細要有中文狀態行，實得 {r['detail']!r}")
+            page.close()
+    print("✓ 查詢頁狀態顯示：開立不標、未收錄碼原樣標、展開有中文狀態行")
 
 
 def test_payload_contract():

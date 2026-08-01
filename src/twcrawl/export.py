@@ -124,10 +124,15 @@ def _load_slots(path: Path) -> dict[str, int]:
 
 
 # 發票狀態碼→中文（issue #14）。PRD 記載的來源（capture 到的 com001i/
-# statusCodes 字典）實測只有 UI 訊息碼、沒有發票狀態碼，所以這份對照只收
-# 實測可對應的碼：庫內全部正常開立發票都帶 INVOICE0003S。未收錄的碼原樣
-# 進 payload——查詢頁顯示原始碼不吞資訊，新碼出現時在這裡補一行即可。
+# statusCodes 字典）實測只有 UI 訊息碼、沒有發票狀態碼（SPA 殼與 23 支
+# lazy chunk 都翻過），所以這份對照只收實測可對應的碼：庫內全部正常開立
+# 發票都帶 INVOICE0003S。未收錄的碼原樣進 payload——查詢頁顯示原始碼
+# 不吞資訊，新碼出現時在這裡補一行即可。
 INVOICE_STATUS_ZH = {"INVOICE0003S": "開立"}
+# 列上不標的常態碼。「哪個狀態算常態」是 Python 決定的事實——頁面若拿
+# 譯文比對（status !== "開立"），改譯名或加第二個常態碼就會讓 431 列
+# 靜默全長出徽章，所以 payload 帶 statusFlagged，頁面只讀旗標。
+_STATUS_NORMAL = {None, "INVOICE0003S"}
 
 
 def load_budget(path: Path) -> dict | None:
@@ -311,7 +316,8 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
         invoice_rows.append({"num": num, "date": str(inv_date)[:10],
                              "seller": si["display"], "category": cat.name,
                              "amount": amount, "items": inv_items,
-                             "status": INVOICE_STATUS_ZH.get(st, st)})
+                             "status": INVOICE_STATUS_ZH.get(st, st),
+                             "statusFlagged": st not in _STATUS_NORMAL})
 
     for mon in months.values():
         mon["byCategory"] = dict(mon["byCategory"])

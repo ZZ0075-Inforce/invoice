@@ -54,6 +54,7 @@
                     font-family: inherit; }
   a.fda-mark { text-decoration: none; font-size: 12px; }
   .lot-mark { font-size: 12px; cursor: help; }
+  .st-mark { color: var(--muted); font-size: 11px; }
   a.map:hover, .linkish:hover { text-decoration: underline; }
   .more { margin-top: 10px; }
   #savebar { position: fixed; left: 50%; transform: translateX(-50%);
@@ -148,13 +149,14 @@ TW.page({
       + (w.also ? `；另符合${w.also}，擇高` : "")
     )}">🎉</span>` : "";
   }
-  // 發票狀態（issue #14）：翻譯在匯出端做完，這裡拿到的是中文或未收錄的
-  // 原始碼。正常的「開立」不佔列上版面（展開明細看得到），非常態（作廢、
-  // 未收錄碼）才在號碼旁標出來
+  // 發票狀態（issue #14）：翻譯與「算不算常態」都在匯出端決定，這裡只讀
+  // statusFlagged——拿譯文比對的話，改譯名會讓 431 列靜默全長出徽章。
+  // 常態的「開立」不佔列上版面（展開明細看得到），非常態（作廢、未收錄
+  // 碼）才在號碼旁標出來
   function stMark(v) {
-    return v.status && v.status !== "開立"
-      ? ` <span style="color:var(--muted);font-size:11px" title="發票狀態">（${
-          esc(v.status)}）</span>` : "";
+    return v.statusFlagged && v.status
+      ? ` <span class="st-mark" title="發票狀態">（${esc(v.status)}）</span>`
+      : "";
   }
   const unnecessarySet = ui.unnecessaryCats(D.categories);
   const dates = D.invoices.map(v => v.date).sort();
