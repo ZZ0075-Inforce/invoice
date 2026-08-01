@@ -246,15 +246,42 @@ twcrawl lottery --no-cloud     # 跳過雲端專屬獎清冊（首抓全部獎�
 結果進月報的對獎磚與中獎明細卡（含領獎期限），查詢頁的發票列標 🎉。
 中獎受領獎期限約束，過期不再比對。
 
-### 7. `backup` — 加密備份包
+### 7. `backup` / `restore` — 加密備份包與還原
 
 ```powershell
 twcrawl backup                             # 互動輸入密碼，或設 TWCRAWL_BACKUP_PASSWORD
+twcrawl restore out\backup\twcrawl-backup-20260802-0029.zip
 ```
 
-把資料庫與 `captures\` 打包成 AES-256 加密 zip（`out\backup\`），**這個檔案才可以
-放雲端硬碟**；`state\`（登入 cookie）永遠不進備份。密碼自行保管，遺失即不可讀。
-明細在平台上只保存近 6 個月，本機資料毀損即永久遺失——請定期備份。
+備份包是 AES-256 加密 zip（產在 `out\backup\`），內容是資料庫、`captures\`
+與個人設定（`categories.local.json`、`budget.local.json`）——**只有這個檔案
+可以放雲端硬碟**。`state\`（登入 cookie）永遠不進備份，還原時也不會憑空出現，
+所以換機之後要重跑一次 `login`。密碼自行保管，遺失即不可讀。
+
+平台的查詢窗口只到當年年初（見上面 `fetch` 那節），**本機資料毀損就是永久
+遺失**——請定期備份，並把備份包放到雲端硬碟或另一顆磁碟。
+
+`restore` 會把包解回**目前所在的目錄**，然後當場打開資料庫報出發票與明細
+筆數、最新發票日期，確認資料真的回來了。工作區已經有資料時它會直接拒絕
+（訊息會列出哪些東西會被蓋掉），確定要覆蓋才加 `--force`。密碼錯、檔案不在、
+不是備份包這幾種情形都給人話訊息，而且**一個檔案都不會寫出去**。
+
+#### 換到新電腦
+
+1. 依上面「安裝」裝好 Python 環境（venv + `pip install -e .` + `playwright install chromium`）
+2. 建一個**空目錄**當新工作區，並 `cd` 進去（工作區就是你所在的目錄）
+3. 把雲端硬碟上的備份包抓下來，還原：
+
+   ```powershell
+   twcrawl restore D:\Downloads\twcrawl-backup-20260802-0029.zip
+   ```
+
+   輸入備份密碼，看它印出「發票 N 張、明細 M 列、最新發票日期 …」——數字對得上就成功了。
+4. `twcrawl export` 產生五頁確認畫面正常（分類規則與預算都在包裡，不必重建）
+5. `twcrawl login` 重新登入平台（登入 cookie 不在備份包內），之後 `twcrawl update` 照舊
+
+> 這條路實際演練過（2026-08-02）：真實資料庫備份 → 空目錄還原 → `export`
+> 五頁全數產出，筆數與原工作區一致。
 
 ### 8. `update` — 每月例行一鍵跑完
 
@@ -320,7 +347,7 @@ twcrawl probe <url> # 頁面結構偵察報告（表格 id、表頭、分頁連�
 | `out\map.html` + `out\vendor\` | 消費地圖（開啟時載入 OSM 圖磚） |
 | `out\match_report.csv` | 比對結果（UTF-8 BOM，Excel 可直接開） |
 | `out\fda_*.csv` | 問題商品清單 |
-| `out\backup\` | AES-256 加密備份包（唯一可上雲的產物） |
+| `out\backup\` | AES-256 加密備份包（唯一可上雲的產物；含資料庫、`captures\` 與個人設定） |
 | `out\bgmopen1.zip` | 稅籍登記資料快取（公開資料，非個資） |
 | `categories.local.json` | 個人店家分類規則與招牌名別名 |
 | `budget.local.json` | 個人預算設定（選填；每月總額與非必要上限） |
@@ -337,7 +364,7 @@ twcrawl probe <url> # 頁面結構偵察報告（表格 id、表頭、分頁連�
 ## 測試
 
 ```powershell
-python tests\test_twcrawl.py                    # 60 個測試，不需要 pytest
+python tests\test_twcrawl.py                    # 61 個測試，不需要 pytest
 python tests\test_twcrawl.py --update-golden    # 有意改動畫面後重生頁面快照
 ```
 

@@ -119,6 +119,13 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="備份包輸出目錄（預設工作區的 out/backup；"
                             "可指向工作區外，例如雲端同步目錄）")
 
+    p_res = sub.add_parser(
+        "restore", help="從加密備份包還原工作區（換新電腦或本機資料毀損時用）"
+    )
+    p_res.add_argument("archive", help="備份包路徑（twcrawl-backup-*.zip）")
+    p_res.add_argument("--force", action="store_true",
+                       help="工作區已經有資料時仍然覆蓋（預設是拒絕）")
+
     p_upd = sub.add_parser(
         "update",
         help="每月例行：登入→fetch→fda→match→lottery→export→backup 一氣呵成",
@@ -202,6 +209,17 @@ def _dispatch(args: argparse.Namespace, ws: Workspace) -> int:
         if not pw:
             raise SystemExit("需要備份密碼（互動輸入或設 TWCRAWL_BACKUP_PASSWORD）。")
         commands.cmd_backup(pw, ws, out_dir=args.out)
+        return 0
+
+    if args.cmd == "restore":
+        # 刻意不 require_db、也不先開連線：那會在空工作區生出一個空資料庫，
+        # 剛好把「這裡已經有資料」的判斷變成永遠成立
+        pw = commands.backup_password("備份包密碼：")
+        if not pw:
+            raise SystemExit(
+                "需要備份包密碼（互動輸入或設 TWCRAWL_BACKUP_PASSWORD）。")
+        res = commands.cmd_restore(ws, args.archive, pw, force=args.force)
+        print(commands.format_restore(res))
         return 0
 
     if args.cmd == "update":

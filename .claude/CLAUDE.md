@@ -16,7 +16,7 @@ FDA 目前接三個來源：中聯油脂案專區強制下架清單（edible_oil
 ```
 pip install -e .                      # 一律 editable；PyPI 上的 twcrawl 是無關的舊套件
 python -m playwright install chromium # playwright 指令找不到時用這個
-python tests/test_twcrawl.py          # 測試（60/60，不用 pytest）
+python tests/test_twcrawl.py          # 測試（61/61，不用 pytest）
 python tests/test_twcrawl.py --update-golden   # 有意改動五頁畫面後重生 tests/golden/
 
 # 每月例行（一鍵；fetch 區間自動推算、FDA 回溯 90 天只給 feed 型來源）
@@ -37,6 +37,7 @@ twcrawl serve                         # 本機小站（127.0.0.1）：同頁面�
 twcrawl bizreg                        # 財政部稅籍對照表（統編→行業/地址；66MB 公開資料）
 twcrawl geocode                       # 地址→座標（NLSC 門牌級為主；增量）→ out/map.html
 twcrawl backup                        # AES-256 備份包（唯一可上雲產物；state/ 永不進包）
+twcrawl restore <包>                   # 還原到目前目錄＋當場驗筆數；已有資料拒絕，--force 才蓋
 
 # 維護／除錯
 twcrawl capture                       # 人工操作、錄下回應（API 改版時用來重新確認形狀）
@@ -196,7 +197,19 @@ src/twcrawl/
 ├── __main__.py   讓 `python -m twcrawl` 可用。jobs 起子行程時不必猜 console
 │                 script 裝在哪（venv 腳本目錄各平台不同），sys.executable 一定
 │                 指向同一個環境
-├── backup.py     AES-256 加密備份包（pyzipper；state/ 有防呆 assert 永不進包）
+├── backup.py     AES-256 加密備份包的**兩個方向**（pyzipper）。收集範圍 `_targets()`
+│                 出一份，還原就拿同一份推出「可接受的包內路徑」——分兩個模組的話，
+│                 備份多收一個目錄而還原不認得它，會在最需要它的那天才發現。包收
+│                 資料庫＋captures/＋個人設定（categories/budget.local.json，
+│                 2026-08-02 換機演練後補：少了它們是**靜默**降級，畫面照出只是
+│                 店家全掉回通用規則）；state/ 兩端都守（不收、也不還原）。
+│                 restore 的順序是刻意的：**寫出第一個檔案前所有檢查都做完**
+│                 （檔案在不在／工作區會不會被蓋掉／包的形狀／落地路徑不越界／
+│                 密碼對不對），還原是資料毀損才跑的指令，解到一半才失敗比不動更糟。
+│                 包內路徑當不可信輸入看：`..`、絕對路徑、state/ 逐項擋，落地路徑
+│                 再用 resolve() 確認在 root 底下（第二層，字串比對萬一有洞用）。
+│                 已有資料預設**拒絕**而非詢問——restore 也會被非互動地呼叫，
+│                 而「工作區有沒有資料」是比「哪幾個檔會撞名」更該問的問題
 ├── geocode.py    地址→座標：NLSC TextQueryMap 門牌級為主（**要帶 maps.nlsc.gov.tw
 │                 的 Referer** 否則 PERMISSION DENIED）、Nominatim 路段級後備（台灣
 │                 門牌會 MISS）；稅籍地址須清洗（全形、里鄰、截到「號」）
@@ -613,7 +626,18 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   因為壞在解析階段。中文訊息因此全在 .ps1（存成 UTF-8 with BOM，Windows
   PowerShell 5.1 沒 BOM 會用 ANSI 讀）。三條路徑都實測過：缺 venv、工作
   失敗、結束碼傳遞。測試 59→60（缺 venv 那條，中文被搬回 .bat 就會變紅）
-- ⬜ 「操作更順手」批次剩餘：#17 restore、#19 import（皆無阻塞）、
+- ✅ `twcrawl restore`（2026-08-02，issue #17）：備份從此不再單向。`restore <包>`
+  解回目前工作區，**當場**打開資料庫報筆數與最新日期（只印筆數與日期——金額與
+  店家名是消費紀錄）。設計要點見架構的 backup.py 條目；已有資料預設拒絕、
+  `--force` 才蓋。**演練找到一個真缺口**：`categories.local.json`／
+  `budget.local.json` 原本不在包裡，換機會靜默失去手工累積的規則與預算
+  （畫面照樣出得來，只是店家全掉回通用規則），所以 `_targets()` 一併補收。
+  驗證：真實資料庫 496 張／1,248 列 → 空目錄還原 → `export` 五頁全出，
+  筆數與原工作區一致；四種錯誤（沒密碼、密碼錯、檔案不在、不是備份包）
+  都給人話且一個檔案都不寫。四道守衛逐一還原確認變紅（含「只拿掉 state/
+  那一條分支」——訊息若只照抄路徑就抓不到，所以斷言的是紅線用語本身）。
+  測試 60→61
+- ⬜ 「操作更順手」批次剩餘：#19 import（無阻塞）、
   #21 長工＋啟動器改指向（等 #20 已備妥，#18 也已完成）、#22 控制台匯入（等 #19）
 - ⬜ 緩辦（要做先問）：CSV 匯出（分類趨勢圖已做＝#11；地圖店家搜尋立案為 #15）
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附

@@ -20,13 +20,14 @@ from __future__ import annotations
 import datetime as _dt
 import getpass
 import os
+import sqlite3
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 from . import backup as backup_mod
-from . import export, handoff, lottery
+from . import db, export, handoff, lottery
 from .browser import browser_context
 from .categories import Classifier
 from .match import run_match
@@ -56,14 +57,18 @@ def auto_month_range(last_inv_date: str | None, today: _dt.date) -> tuple[str, s
     return f"{y:04d}-{m:02d}", to
 
 
-def backup_password() -> str | None:
-    """備份密碼：環境變數優先，其次互動輸入；非互動終端機回 None。"""
+def backup_password(prompt: str = "備份密碼（留空跳過備份）：") -> str | None:
+    """備份密碼：環境變數優先，其次互動輸入；非互動終端機回 None。
+
+    backup 與 restore 是同一個密碼，所以環境變數名與「非互動就回 None」的
+    規則只有這一份；只有提示語不同（restore 留空不是「跳過」而是做不下去）。
+    """
     pw = os.environ.get("TWCRAWL_BACKUP_PASSWORD")
     if pw:
         return pw
     if not sys.stdin or not sys.stdin.isatty():
         return None
-    return getpass.getpass("備份密碼（留空跳過備份）：")
+    return getpass.getpass(prompt)
 
 
 def open_dashboard(path: Path | str) -> None:
@@ -185,6 +190,55 @@ def cmd_backup(password: str, ws: Workspace, *,
                out_dir: Path | str | None = None) -> dict:
     path = backup_mod.make_backup(password, ws, out_dir=out_dir)
     return {"path": str(path)}
+
+
+def db_stats(ws: Workspace) -> dict:
+    """打開資料庫數一數，順便證明它真的打得開。
+
+    只回筆數與日期：金額與店家名是消費紀錄，不進終端機輸出
+    （CLAUDE.md 個資界線）。
+    """
+    try:
+        conn = db.connect(ws.db)
+    except sqlite3.DatabaseError as e:
+        raise SystemExit(
+            f"資料庫打不開（{ws.db}）：{e}\n"
+            "  → 檔案可能損毀，換一個備份包再試。") from None
+    try:
+        rows = conn.execute(
+            "select (select count(*) from invoices),"
+            " (select count(*) from invoice_items),"
+            " (select max(inv_date) from invoices)").fetchone()
+    finally:
+        conn.close()  # Windows：開著的連線會擋住目錄清理
+    return {"invoices": rows[0], "items": rows[1], "last": rows[2]}
+
+
+def cmd_restore(ws: Workspace, archive: Path | str, password: str, *,
+                force: bool = False) -> dict:
+    """還原備份包，並當場證明資料真的回來了。
+
+    驗證不是選配：包解得開不等於資料庫可用，而這條路一年跑不到一次——
+    沒有當場確認，等於還是沒演練過。
+    """
+    res = backup_mod.restore_backup(archive, password, ws, force=force)
+    return {**res, "verify": db_stats(ws)}
+
+
+def format_restore(res: dict) -> str:
+    v = res["verify"]
+    return "\n".join([
+        "\n=== 還原完成 ===",
+        f"  備份包：{res['archive']}",
+        f"  還原 {res['files']} 個檔案（{res['bytes'] / 1_048_576:.1f} MB）"
+        f"到 {res['root']}",
+        f"  資料庫：{res['db']}",
+        f"    發票 {v['invoices']} 張、明細 {v['items']} 列",
+        f"    最新發票日期：{v['last'] or '（庫內沒有發票）'}",
+        "  → 登入狀態不在備份包內（ADR-0001），"
+        "要抓新資料請先 `twcrawl login`。",
+        "  → 現在可以 `twcrawl export` 開儀表板確認。",
+    ])
 
 
 # ---- update：步驟清單 ----------------------------------------------------

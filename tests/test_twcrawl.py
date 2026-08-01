@@ -1235,6 +1235,106 @@ def test_backup_roundtrip_and_excludes_state():
     print("✓ backup 加密可往返、錯誤密碼被拒、state/ 兩道防線都成立")
 
 
+def test_restore_roundtrip_refuses_clobber_and_state():
+    """備份 → 還原往返：筆數一致、既有資料不被默默蓋掉、state/ 不會憑空出現。
+
+    這條路一年跑不到一次，壞掉的代價卻是全部資料，所以六種失敗（工作區已有
+    資料、密碼錯、檔案不在、不是備份包、包內路徑越界、包裡有 state/）都在這裡
+    釘住——而且每一種都要「一個檔案都不寫出去」。
+    """
+    import pyzipper
+    from twcrawl import backup as bk
+    from twcrawl import db as db_mod
+    from twcrawl.commands import cmd_restore, db_stats
+    from twcrawl.workspace import Workspace
+
+    def fails_with(fn, needle: str) -> None:
+        try:
+            fn()
+        except SystemExit as e:
+            assert needle in str(e), f"訊息要講人話且提到「{needle}」：{e}"
+            return
+        raise AssertionError(f"應該要失敗並提到「{needle}」")
+
+    with TemporaryDirectory() as td:
+        td = Path(td)
+        src = Workspace(td / "src")
+        src.ensure_out()
+        conn = db_mod.connect(src.db)
+        try:
+            db_mod.upsert_invoices(conn, [an_invoice("AA00000001", "2026-05-01"),
+                                          an_invoice("AA00000002", "2026-06-02")])
+            db_mod.upsert_items(conn, [an_item("AA00000001", 1, "測試品項")])
+        finally:
+            conn.close()  # Windows：先關連線才能備份／清理
+        (src.captures / "einvoice-x" / "responses").mkdir(parents=True)
+        (src.captures / "einvoice-x" / "responses" / "r.json").write_text(
+            "{}", encoding="utf-8")
+        # 手工累積的個人設定：少了它們的還原是靜默降級（畫面照出，只是
+        # 店家全掉回通用規則），所以備份包收、還原也要放回來
+        src.rules.write_text('{"rules": {"小巷麵館": "餐飲"}}', encoding="utf-8")
+        src.budget.write_text('{"monthly": 25000}', encoding="utf-8")
+        src.ensure_state()
+        (src.state / "einvoice.json").write_text("{}", encoding="utf-8")
+
+        pack = bk.make_backup("pw123", src, out_dir=td / "packs")
+        before = db_stats(src)
+        assert before == {"invoices": 2, "items": 1, "last": "2026-06-02"}, before
+
+        # -- 換機：空目錄還原 -------------------------------------------------
+        dst = Workspace(td / "dst")
+        dst.root.mkdir()
+        res = cmd_restore(dst, pack, "pw123")
+        assert res["verify"] == before, f"還原後筆數要一致：{res['verify']}"
+        assert (dst.captures / "einvoice-x" / "responses" / "r.json"
+                ).read_text(encoding="utf-8") == "{}", "captures/ 也要回來"
+        assert "小巷麵館" in dst.rules.read_text(encoding="utf-8"), \
+            "個人分類規則要跟著回來，否則換機是靜默降級"
+        assert dst.budget.exists(), "預算設定也在包裡"
+        assert not dst.state.exists(), "還原不該生出 state/（登入 cookie）"
+
+        # -- 已經有資料就不默默覆蓋 -------------------------------------------
+        assert bk.existing_data(dst), "還原過的工作區當然算「已經有資料」"
+        fails_with(lambda: cmd_restore(dst, pack, "pw123"), "已經有資料")
+        forced = cmd_restore(dst, pack, "pw123", force=True)
+        assert forced["verify"] == before, "--force 要真的還原"
+
+        # -- 壞掉的輸入都給人話，而且一個檔案都不寫出去 -----------------------
+        fresh = Workspace(td / "fresh")
+        fresh.root.mkdir()
+        fails_with(lambda: cmd_restore(fresh, pack, "wrong"), "密碼錯誤")
+        assert not fresh.db.exists(), "密碼錯誤時不該留下半套還原"
+        fails_with(lambda: cmd_restore(fresh, td / "nope.zip", "pw123"),
+                   "找不到備份包")
+
+        plain = td / "plain.zip"
+        with pyzipper.AESZipFile(plain, "w") as zf:
+            zf.writestr("readme.txt", "不是備份包")
+        fails_with(lambda: cmd_restore(fresh, plain, "pw123"),
+                   "不是 twcrawl 備份包")
+
+        # 包內路徑是不可信輸入：`..` 不能把檔案寫到工作區外
+        slip = td / "slip.zip"
+        with pyzipper.AESZipFile(slip, "w") as zf:
+            zf.writestr("out/twcrawl.sqlite", b"x")
+            zf.writestr("../evil.txt", "x")
+        fails_with(lambda: cmd_restore(fresh, slip, "pw123"), "工作區外")
+        assert not (td / "evil.txt").exists(), "越界的項目不該真的被寫出來"
+
+        # ADR-0001 紅線在還原端也守：手工塞了 state/ 的包整份拒絕
+        tainted = td / "tainted.zip"
+        with pyzipper.AESZipFile(tainted, "w") as zf:
+            zf.writestr("out/twcrawl.sqlite", b"x")
+            zf.writestr("state/einvoice.json", "{}")
+        # 訊息要指名紅線本身，不是只是把路徑照抄一遍——照抄的話，把 state 的
+        # 判斷整條拿掉、讓它掉到「不是備份包會有的內容」也一樣過得了關
+        fails_with(lambda: cmd_restore(fresh, tainted, "pw123"),
+                   "登入 cookie 永不備份")
+        assert not fresh.state.exists() and not fresh.db.exists(), \
+            "整份拒絕就不該留下任何東西"
+    print("✓ restore 往返筆數一致；既有資料／密碼／檔案／包形狀／越界／state 都擋")
+
+
 def test_bizreg_filters_needed_bans():
     import zipfile
 
