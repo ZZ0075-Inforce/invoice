@@ -34,6 +34,8 @@
   .st.running { color: var(--s1); }
   .st.done { color: var(--up-good); }
   .st.failed { color: var(--s2); }
+  /* 「忙碌／連線有狀況」不是工作失敗，配色也不該和失敗同一個 */
+  .st.notice { color: var(--text-2); }
   #out {
     background: var(--surface-1); border: 1px solid var(--border);
     border-radius: 8px; padding: 10px 12px; margin: 0;
@@ -60,7 +62,8 @@
 </header>
 
   <!-- file:// 開檔時控制台沒有後端可打。給說明，不給按了沒反應的按鈕
-       （ADR-0002 的雙模式慣例：唯讀模式要說清楚自己是唯讀）。 -->
+       （ADR-0002 的雙模式慣例：唯讀模式要說清楚自己是唯讀）。
+       這個容器也兼作初始化失敗的出口。 -->
   <div id="need-serve" class="empty" hidden>
     控制台需要 <b>serve 模式</b>。<br><br>
     請在工作區執行 <code>twcrawl serve</code>，再從它開啟的頁面進來——
@@ -82,98 +85,123 @@
   const OUT = document.getElementById("out");
   const ST = document.getElementById("state");
   const BTN = document.getElementById("run-export");
+  const NEED = document.getElementById("need-serve");
 
-  document.querySelector("header").append(TW.themeButton());
+  try {
+    if (!window.TW) throw new Error("ui.js 沒有載入");
+    document.querySelector("header").append(TW.themeButton());
 
-  // http(s) 才有後端。file:// 之下只留說明。
-  if (location.protocol !== "http:" && location.protocol !== "https:") {
-    document.getElementById("need-serve").hidden = false;
-    return;
-  }
-  document.getElementById("panel").hidden = false;
+    // http(s) 才有後端。file:// 之下只留說明。
+    if (!TW.isServe()) { NEED.hidden = false; return; }
+    document.getElementById("panel").hidden = false;
 
-  let cursor = 0;      // 已經收過幾行（server 端算的總行數，不會倒退）
-  let dropped = 0;     // 已知被丟棄的行數，只在增加時提示一次
-  let timer = null;
+    let cursor = 0;    // 已收過幾行（server 端算的總行數，不會倒退）
+    let dropped = 0;   // 已知被丟棄的行數，只在增加時提示一次
+    let followed = null;  // 正在追哪一個工作 id
+    let timer = null;
 
-  /** 工作輸出一律走 textContent。
-   *  這些行含使用者自己的資料（店家名、路徑），用 innerHTML 等於讓子行程
-   *  的輸出決定頁面結構——逸出漏一處就是注入。 */
-  function write(text) {
-    OUT.append(document.createTextNode(text + "\n"));
-    OUT.scrollTop = OUT.scrollHeight;
-  }
-
-  function setState(job) {
-    if (!job) {
-      ST.className = "st idle"; ST.textContent = "閒置";
-      BTN.disabled = false; return;
+    /** 工作輸出一律走 textContent。
+     *  這些行含使用者自己的資料（店家名、路徑），用 innerHTML 等於讓子行程
+     *  的輸出決定頁面結構——逸出漏一處就是注入。 */
+    function write(text) {
+      OUT.append(document.createTextNode(text + "\n"));
+      OUT.scrollTop = OUT.scrollHeight;
     }
-    const running = job.state === "running";
-    BTN.disabled = running;
-    ST.className = "st " + (job.state === "done" ? "done"
-      : job.state === "failed" ? "failed" : "running");
-    ST.textContent = running ? "執行中：" + job.name
-      : job.state === "done" ? "完成：" + job.name
-      : "失敗：" + job.name + "（結束碼 " + job.returncode + "）";
-  }
 
-  function absorb(job) {
-    if (job.dropped > dropped) {
-      write("（前面 " + (job.dropped - dropped) + " 行過長已捲掉）");
-      dropped = job.dropped;
+    function setState(job) {
+      if (!job) {
+        ST.className = "st idle"; ST.textContent = "閒置";
+        BTN.disabled = false; return;
+      }
+      const running = job.state === "running";
+      BTN.disabled = running;
+      ST.className = "st " + (job.state === "done" ? "done"
+        : job.state === "failed" ? "failed" : "running");
+      ST.textContent = running ? "執行中：" + job.name
+        : job.state === "done" ? "完成：" + job.name
+        : "失敗：" + job.name + "（結束碼 " + job.returncode + "）";
     }
-    for (const line of job.lines || []) write(line);
-    if (typeof job.next === "number") cursor = job.next;
-  }
 
-  function fail(msg) {
-    ST.className = "st failed"; ST.textContent = "失敗";
-    BTN.disabled = false;
-    write("控制台錯誤：" + msg);
-  }
-
-  function schedule() {
-    clearTimeout(timer);
-    timer = setTimeout(poll, 400);
-  }
-
-  async function poll() {
-    try {
-      const r = await fetch("/api/jobs/current?since=" + cursor);
-      const j = await r.json();
-      if (!j.ok) return fail(j.error || ("HTTP " + r.status));
-      if (!j.job) return setState(null);
-      absorb(j.job);
-      setState(j.job);
-      if (j.job.state === "running") schedule();
-    } catch (e) {
-      fail(e && e.message ? e.message : String(e));
+    /** 控制台自己的狀況（忙碌、連線斷掉）——**不是**工作失敗。
+     *  兩者混用同一態的話，別的分頁按下重生時，這頁會顯示「失敗」，
+     *  但其實什麼都沒失敗，而且真正在跑的工作從此看不到。 */
+    function notice(msg) {
+      ST.className = "st notice"; ST.textContent = msg;
+      BTN.disabled = true;   // 有工作在跑或狀況未明，先別讓人再按
     }
-  }
 
-  async function run() {
-    OUT.textContent = ""; cursor = 0; dropped = 0;
-    BTN.disabled = true;
-    ST.className = "st running"; ST.textContent = "啟動中…";
-    try {
-      const r = await fetch("/api/jobs", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({cmd: "export"}),
-      });
-      const j = await r.json();
-      if (!j.ok) return fail(j.error || ("HTTP " + r.status));
-      absorb(j.job);
-      setState(j.job);
-      schedule();
-    } catch (e) {
-      fail(e && e.message ? e.message : String(e));
+    function absorb(job) {
+      if (followed !== job.id) {
+        // 換了一個工作（可能是別的分頁開的）：重來。這批行是用舊游標取的，
+        // 直接丟掉，下一輪 since=0 會把該工作的輸出從頭取回來。
+        OUT.textContent = ""; cursor = 0; dropped = 0; followed = job.id;
+        return;
+      }
+      if (job.dropped > dropped) {
+        write("（前面 " + (job.dropped - dropped) + " 行過長已捲掉）");
+        dropped = job.dropped;
+      }
+      for (const line of job.lines || []) write(line);
+      if (typeof job.next === "number") cursor = job.next;
     }
-  }
 
-  BTN.addEventListener("click", run);
-  poll();   // 進來先問一次：工作可能是別的分頁按的，這頁也該看得到
+    function schedule(ms) {
+      clearTimeout(timer);
+      timer = setTimeout(poll, ms === undefined ? 400 : ms);
+    }
+
+    async function poll() {
+      try {
+        const r = await fetch("/api/jobs/current?since=" + cursor);
+        const j = await r.json();
+        if (!j.ok) { notice("讀不到工作狀態，重試中…"); return schedule(1500); }
+        if (!j.job) { followed = null; return setState(null); }
+        absorb(j.job);
+        setState(j.job);
+        if (j.job.state === "running") schedule();
+      } catch (e) {
+        // 連線問題不是工作失敗：留著已收到的輸出，繼續重試
+        notice("連線中斷，重試中…");
+        schedule(1500);
+      }
+    }
+
+    async function run() {
+      BTN.disabled = true;
+      ST.className = "st running"; ST.textContent = "啟動中…";
+      try {
+        const r = await fetch("/api/jobs", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({cmd: "export"}),
+        });
+        const j = await r.json();
+        if (!j.ok) {
+          // 409＝已經有工作在跑（很可能是別的分頁按的）。這不是失敗，
+          // 接上去看它的進度就好。輸出**不清空**——清了就看不到人家跑到哪。
+          notice(r.status === 409 ? "已有工作在跑，接上進度…"
+                                  : (j.error || ("HTTP " + r.status)));
+          return schedule(200);
+        }
+        absorb(j.job);
+        setState(j.job);
+        schedule();
+      } catch (e) {
+        notice("送不出請求（" + (e && e.message ? e.message : e) + "），重試中…");
+        schedule(1500);
+      }
+    }
+
+    BTN.addEventListener("click", run);
+    poll();   // 進來先問一次：工作可能是別的分頁按的，這頁也該看得到
+  } catch (e) {
+    // 沒有這層的話，ui.js 沒被複製到就是一片全白，跟「開錯檔案」分不出來
+    // （CLAUDE.md 的 export 條目點名過這個失效模式）
+    console.error(e);
+    NEED.hidden = false;
+    NEED.textContent = "控制台沒能初始化：" + (e && e.message ? e.message : e)
+      + "　重跑 twcrawl export 通常就能修好；詳細錯誤在瀏覽器主控台。";
+  }
 })();
 </script>
 </body>

@@ -16,7 +16,7 @@ FDA 目前接三個來源：中聯油脂案專區強制下架清單（edible_oil
 ```
 pip install -e .                      # 一律 editable；PyPI 上的 twcrawl 是無關的舊套件
 python -m playwright install chromium # playwright 指令找不到時用這個
-python tests/test_twcrawl.py          # 測試（56/56，不用 pytest）
+python tests/test_twcrawl.py          # 測試（59/59，不用 pytest）
 python tests/test_twcrawl.py --update-golden   # 有意改動五頁畫面後重生 tests/golden/
 
 # 每月例行（一鍵；fetch 區間自動推算、FDA 回溯 90 天只給 feed 型來源）
@@ -33,6 +33,7 @@ twcrawl lottery                       # 對獎：傳統獎＋雲端專屬獎（�
                                       #   --offline 免連網、--no-cloud 跳過雲端清冊
 twcrawl export                        # 衍生五頁 out/：dashboard+query+fda+year+map；自動開頁，--no-open 關
 twcrawl serve                         # 本機小站（127.0.0.1）：同頁面＋歸類寫回 categories.local.json
+                                      #   ＋控制台頁（control.html）：從頁面按鈕起工作，不必開終端機
 twcrawl bizreg                        # 財政部稅籍對照表（統編→行業/地址；66MB 公開資料）
 twcrawl geocode                       # 地址→座標（NLSC 門牌級為主；增量）→ out/map.html
 twcrawl backup                        # AES-256 備份包（唯一可上雲產物；state/ 永不進包）
@@ -173,18 +174,50 @@ src/twcrawl/
 │                 跨次匯出同分類同色，未分類永遠中性灰）
 ├── serve.py      本機小站（ADR-0002 雙模式；只綁 127.0.0.1）：靜態服務 out/ ＋
 │                 POST /api/rules 併規則入 categories.local.json→重生 data.js；
-│                 ThreadingHTTPServer，每請求自開 SQLite 連線（執行緒安全）
+│                 ThreadingHTTPServer，每請求自開 SQLite 連線（執行緒安全）。
+│                 控制台端點（#20）：POST /api/jobs 起白名單工作、
+│                 GET /api/jobs/current 取進度。**API 一律擋跨來源**（GET 也擋
+│                 ——工作輸出含使用者資料，不能只靠瀏覽器的 CORS 政策把關）；
+│                 瀏覽器跨來源必帶 Origin，沒帶的（curl／測試的 urllib）放行
+├── jobs.py       控制台的背景工作：以子行程跑 `python -m twcrawl <指令>`。
+│                 **為什麼是子行程**——serve 是長駐進程，改過 Python 不重啟就
+│                 用到舊模組（2026-07-29 咬過一次），子行程每次都是最新程式碼；
+│                 Playwright 的事件迴圈假設也不該和 HTTP server 的執行緒混。
+│                 範圍限這裡啟動的工作：`/api/rules` 的重生仍走進程內，照舊要
+│                 重啟。白名單 ALLOWED 是唯一的注入防線——端點收的是**工作名稱
+│                 不是 argv**，頁面沒有機會拼命令列。同時只准一個（查與設在同
+│                 一個鎖裡；分兩步做，兩個請求會同時通過）。`_run` 的 finally
+│                 不可拿掉：returncode 留在 None 就是 state 永遠 running →
+│                 Runner 永久 Busy → 只能重啟 serve。子行程的環境變數是必要的
+│                 不是保險：PYTHONIOENCODING/-X utf8（管線下 Python 改用地區
+│                 編碼，zh-TW Windows 是 cp950，中文會在子行程內炸）、
+│                 PYTHONUNBUFFERED（否則塊狀緩衝，進度要等結束才一次冒出來）。
+│                 這個模組不 import 其他 twcrawl 模組、不知道有 HTTP 這回事
+├── __main__.py   讓 `python -m twcrawl` 可用。jobs 起子行程時不必猜 console
+│                 script 裝在哪（venv 腳本目錄各平台不同），sys.executable 一定
+│                 指向同一個環境
 ├── backup.py     AES-256 加密備份包（pyzipper；state/ 有防呆 assert 永不進包）
 ├── geocode.py    地址→座標：NLSC TextQueryMap 門牌級為主（**要帶 maps.nlsc.gov.tw
 │                 的 Referer** 否則 PERMISSION DENIED）、Nominatim 路段級後備（台灣
 │                 門牌會 MISS）；稅籍地址須清洗（全形、里鄰、截到「號」）
+├── web/control.html 控制台（#20，serve 專屬）：按鈕起工作、輸出即時顯示、
+│                 成功/失敗狀態。**忙碌（409）與連線錯誤不是「工作失敗」**——
+│                 混成同一態的話，別的分頁按下重生時這頁會顯示失敗，其實什麼
+│                 都沒失敗，而真正在跑的工作從此看不到。工作輸出一律
+│                 textContent（那些行含店家名與路徑，innerHTML 等於讓子行程的
+│                 輸出決定頁面結構）。file:// 之下只給說明不給按鈕（ADR-0002）
 ├── web/ui.js     五頁共用骨架。核心是 `TW.page({needs, ready, clear, render})`：
 │                 主題套用（在 <head> 同步跑，否則先亮後暗閃一下）、payload 讀取與
 │                 完整性判斷（needs 的鍵要存在，陣列還要非空）、**錯誤圍堵**——沒有
 │                 這層的話 render 中途 throw 會留下已清空的容器，畫面與「找不到
 │                 data.js」無法區分。順帶帶進 esc/nt/css/el/themeButton/catColors。
 │                 **是全域 TW 不是 ES module**：file:// 下 import 走 CORS 會被擋，
-│                 與 data.js 不走 fetch 同一個理由（ADR-0002）。別「現代化」
+│                 與 data.js 不走 fetch 同一個理由（ADR-0002）。別「現代化」。
+│                 `isServe()` 是雙模式判準的單一來源（本來各頁各寫一份）；
+│                 `controlLink()` 在 serve 模式把控制台入口注入各頁的 `.sub`
+│                 ——掛點有後備鏈（.sub→header→#app→body），因為 payload 殘缺
+│                 時 `TW.page` 直接 return、`.sub` 根本不存在，而那正是最需要
+│                 按「重生報表」的時候
 ├── web/ui.css    五頁共用色票與文件版面。只收「在有定義的頁逐字相同、且沒定義的
 │                 頁不受影響」的規則。「不受影響」要查兩條路徑：CSS 的 var(--x) 與
 │                 **JS 的 getComputedStyle().getPropertyValue("--x")**（地圖的分類色
@@ -553,6 +586,25 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   「預算」「年度回顧」詞條、儀表板/食安頁詞條四頁→五頁。程式註解與
   CLAUDE.md 現在式的四頁字樣一併掃成五頁（歷史 ✅ 條目描述當時狀態，
   不改）。零程式行為變動
+- ✅ 控制台頁與背景工作執行器（2026-08-01，issue #20；「操作更順手」批次
+  #17–#22 的第一張，也是關鍵路徑——#21／#22 都等它）：serve 之下多一頁
+  control.html，按鈕起工作、輸出即時顯示、成敗明確。這輪只接 export（短、
+  無互動、可重複跑），把「頁面→起工作→看進度→收尾」整條路打穿；長工
+  （update／fetch 含登入交接）是 #21、匯入是 #22。**工作以子行程執行 CLI**
+  ——理由見 jobs.py 條目，順帶讓「改 Python 後 serve 用舊模組」那個坑對這條
+  路徑消失。新增 `__main__.py`。兩軸 review 後補修六件：①`_run` 補 finally
+  （原本讀管線出錯會讓 returncode 永遠是 None → runner 永久 Busy → 只能重啟
+  serve；新增的測試還原後確認變紅）②`returncode` 改在鎖內寫、`snapshot` 不
+  再呼叫會取鎖的 `state`（`threading.Lock` 不可重入，那樣會死鎖）③GET
+  端點補上跨來源檢查（原本只有 POST 有，但驗收條件寫的是「新端點」）
+  ④409／連線錯誤不再顯示成「工作失敗」且不清空輸出（原本別的分頁按下重生
+  時，這頁會顯示失敗但其實什麼都沒失敗）⑤控制台入口的掛點補後備鏈
+  （payload 殘缺時 `.sub` 不存在，而那正是最需要重生的時候）⑥`TW.isServe()`
+  收斂雙模式判準（本來各頁各寫一份）。`jobs.py` 開頭「這個坑消失」的敘述
+  範圍也收窄成實話——`/api/rules` 仍走進程內重生。測試 56→59；golden 零 diff
+  （入口只在 serve 模式注入，而快照走 file://）
+- ⬜ 「操作更順手」批次剩餘：#17 restore、#18 一鍵啟動器、#19 import（皆無
+  阻塞）、#21 長工＋啟動器改指向（等 #18／#20）、#22 控制台匯入（等 #19／#20）
 - ⬜ 緩辦（要做先問）：CSV 匯出（分類趨勢圖已做＝#11；地圖店家搜尋立案為 #15）
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive

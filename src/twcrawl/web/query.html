@@ -86,7 +86,7 @@ TW.page({
     : (Math.round(v * 100) / 100).toString().replace(/\.0+$/, "");
 
   // ---- 同頁雙模式（ADR-0002）：serve 可寫回，file:// 提供複製 -----------
-  const SERVE = location.protocol.startsWith("http");
+  const SERVE = TW.isServe();
   async function saveRules(set, aliases) {
     try {
       const r = await fetch("/api/rules", {

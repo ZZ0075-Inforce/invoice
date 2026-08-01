@@ -122,6 +122,14 @@
     }
   }
 
+  /** serve 模式？（`twcrawl serve` 之下才有後端可打，ADR-0002 的雙模式判準）
+   *
+   *  這個判斷本來各頁各寫一份，加上控制台又多一種寫法，所以收進 TW 出一份。
+   *  行為與原本的 `location.protocol.startsWith("http")` 相同。 */
+  function isServe() {
+    return location.protocol === "http:" || location.protocol === "https:";
+  }
+
   /** 五頁通往控制台的入口（issue #20）。
    *
    *  只在 serve 模式下畫：file:// 之下控制台沒有後端可打，給一條按了沒反應
@@ -130,13 +138,19 @@
    *
    *  掛在各頁的 `.sub` 那一行；四頁的 .sub 是 render 時才建的，而 render 走
    *  body 底部的 inline script（在 DOMContentLoaded 之前跑完），所以這裡等到
-   *  DOMContentLoaded 才找得穩。地圖沒有 .sub，退到 header。
+   *  DOMContentLoaded 才找得穩。
+   *
+   *  後備鏈是有原因的：payload 缺漏時 `TW.page` 會直接 return，於是 .sub
+   *  根本不存在——那正是最需要「重生報表」的時候，卻剛好沒地方掛。所以往下
+   *  退到 header（地圖是這個）／#app／body，總有一個在。
    */
   function controlLink() {
-    if (location.protocol !== "http:" && location.protocol !== "https:") return;
+    if (!isServe()) return;
     if (/control\.html$/.test(location.pathname)) return;   // 自己不連自己
     const host = document.querySelector(".sub")
-      || document.querySelector("header");
+      || document.querySelector("header")
+      || document.querySelector("#app")
+      || document.body;
     if (!host || host.querySelector("a.ctl")) return;
     const a = el("a", "ctl map", "🎛 控制台");
     a.href = "control.html";
@@ -150,6 +164,6 @@
   }
 
   const TW = { THEMES, esc, nt, css, el, themeButton, catColors,
-               unnecessaryCats, monthTotals, monthBounds, page };
+               unnecessaryCats, monthTotals, monthBounds, page, isServe };
   window.TW = TW;
 })();

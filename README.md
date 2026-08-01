@@ -212,6 +212,10 @@ twcrawl export --no-open  # 只產出，不開瀏覽器
 「複製規則片段」。規則檔手貼壞了也不怕：語法錯（含行號）、重複鍵、型別錯都給
 人話提示（雙模式設計見 [`docs/adr/0002`](docs/adr/0002-static-view-serve-writeback.md)）。
 
+`serve` 之下還多一頁**控制台**（各頁右上的「🎛 控制台」進得去）：從網頁按鈕就能
+重生報表，輸出即時顯示在頁面上，不必回終端機。工作跑在子行程，所以改過程式碼
+也不必重啟 serve 才生效。目前只接「重生報表」，其餘指令陸續加入。
+
 **想更精確：`twcrawl bizreg`**（財政部稅籍登記公開資料，66MB、官方每月更新，
 加 `--force` 重新下載）。只保留你發票出現過的統編，之後 `export` 自動獲得三件事：
 未分類店家用稅籍**行業別**後備歸類（rules 沒中才用）、地圖連結帶**營業地址**、
@@ -319,7 +323,7 @@ twcrawl probe <url> # 頁面結構偵察報告（表格 id、表頭、分頁連�
 ## 測試
 
 ```powershell
-python tests\test_twcrawl.py                    # 56 個測試，不需要 pytest
+python tests\test_twcrawl.py                    # 59 個測試，不需要 pytest
 python tests\test_twcrawl.py --update-golden    # 有意改動畫面後重生頁面快照
 ```
 

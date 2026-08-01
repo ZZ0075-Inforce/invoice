@@ -4,7 +4,9 @@
 
 1. serve 是長駐進程。改過 Python 之後不重啟，就會用到進程內的舊模組——
    2026-07-29 真的發生過（分類規則的變更被舊 serve 的重生蓋回去）。子行程
-   每次都是重新 import 的最新程式碼，這個坑從結構上消失。
+   每次都是重新 import 的最新程式碼，**經由這裡啟動的工作**不受那個坑影響。
+   （注意範圍：`/api/rules` 的存檔重生仍走進程內的 `export.write_export`，
+   那條路徑照舊要重啟 serve。這裡沒有把整個 serve 的問題解掉。）
 2. Playwright 的同步 API 對事件迴圈有自己的假設（見 CLAUDE.md「關鍵教訓」），
    不該和 HTTP server 的執行緒模型混在一起。fetch 之類的長工遲早要走這條路。
 3. 進度直接串子行程的 stdout，指令層既有的 print 一行都不用改。
@@ -50,11 +52,22 @@ class Job:
         self._dropped = 0
         self._lock = threading.Lock()
 
+    @staticmethod
+    def _state_of(returncode: int | None) -> str:
+        if returncode is None:
+            return "running"
+        return "done" if returncode == 0 else "failed"
+
     @property
     def state(self) -> str:
-        if self.returncode is None:
-            return "running"
-        return "done" if self.returncode == 0 else "failed"
+        with self._lock:
+            return self._state_of(self.returncode)
+
+    def finish(self, returncode: int) -> None:
+        """收尾。與 add／snapshot 共用同一個鎖：結束碼是「還在跑嗎」的唯一
+        依據，讓它在鎖外寫的話，狀態的正確性就只靠寫入順序的巧合。"""
+        with self._lock:
+            self.returncode = returncode
 
     def add(self, line: str) -> None:
         with self._lock:
@@ -76,7 +89,8 @@ class Job:
             return {
                 "id": self.id,
                 "name": self.name,
-                "state": self.state,
+                # 鎖不可重入，所以這裡不能走 self.state（它自己也要取鎖）
+                "state": self._state_of(self.returncode),
                 "returncode": self.returncode,
                 "lines": self._lines[start:],
                 "next": self._dropped + len(self._lines),
@@ -122,6 +136,10 @@ class Runner:
         #   冒出來，「即時顯示」就成了空話。
         env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
         argv = [sys.executable, "-X", "utf8", "-m", "twcrawl", *job.args]
+        # 這個函式**一定**要替工作收尾。少了 finally，讀管線時的任何例外都會
+        # 讓 returncode 永遠留在 None：狀態卡在 running、Runner 從此永久 Busy、
+        # 頁面的按鈕永久 disabled，只能重啟 serve 才救得回來。
+        rc = -1
         try:
             proc = subprocess.Popen(
                 argv, cwd=str(cwd), env=env,
@@ -130,10 +148,17 @@ class Runner:
             )
         except OSError as exc:  # 直譯器不見、cwd 不存在……
             job.add(f"啟動失敗：{exc}")
-            job.returncode = -1
+            job.finish(rc)
             return
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            job.add(line.rstrip("\n"))
-        proc.stdout.close()
-        job.returncode = proc.wait()
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                job.add(line.rstrip("\n"))
+            proc.stdout.close()
+            rc = proc.wait()
+        except Exception as exc:  # 管線讀壞、行程被外力砍掉……
+            job.add(f"工作中斷：{exc}")
+            proc.kill()          # 別留下沒人收的孤兒行程
+            rc = proc.wait()
+        finally:
+            job.finish(rc)

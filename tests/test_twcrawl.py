@@ -1624,6 +1624,38 @@ def _post_json(port: int, path: str, payload: dict, origin: str | None = None):
         return e.code, json.loads(e.read().decode("utf-8"))
 
 
+def test_jobs_runner_recovers_when_job_cannot_start():
+    """工作起不來也一定要收尾，否則 runner 永久 Busy、控制台再也按不動。
+
+    這是 `_run` 那個 finally 的理由：只要 returncode 留在 None，state 就永遠
+    是 running，Runner.start 從此每次都拋 Busy，只能重啟 serve 才救得回來。
+    用「cwd 不存在」來逼出啟動失敗——不必真的跑起一個行程，判定是確定的。
+    """
+    import time
+
+    from twcrawl import jobs
+
+    runner = jobs.Runner()
+    job = runner.start("export", Path("D:/絕不存在的工作區/nope"))
+    for _ in range(100):                      # 啟動失敗是同步的，很快
+        if job.state != "running":
+            break
+        time.sleep(0.05)
+    assert job.state == "failed", f"起不來的工作該收在 failed，卻是 {job.state}"
+    assert job.returncode is not None, "returncode 留在 None 會讓 runner 卡死"
+
+    # 真正要守的不變式：前一個工作收尾後，下一個要能開得起來
+    again = runner.start("export", Path("D:/絕不存在的工作區/nope"))
+    assert again.id != job.id, "前一個工作結束後應該能再開下一個"
+
+    try:
+        runner.start("不存在的工作", Path("."))
+        raise AssertionError("白名單外的名稱應該被擋下")
+    except KeyError:
+        pass
+    print("✓ jobs：工作起不來也會收尾（runner 不會永久 Busy）、白名單擋住未知名稱")
+
+
 def test_serve_jobs_runs_export_in_subprocess():
     """控制台的工作端點：真的起子行程跑 export，輸出收得到、同時只准一個。
 
@@ -1634,6 +1666,7 @@ def test_serve_jobs_runs_export_in_subprocess():
     """
     import threading
     import time
+    import urllib.error
     import urllib.request
 
     from twcrawl import serve as serve_mod
@@ -1657,7 +1690,15 @@ def test_serve_jobs_runs_export_in_subprocess():
             code, j = _post_json(port, "/api/jobs", {"cmd": "export"})
             assert code == 202 and j["ok"], f"啟動工作失敗：{code} {j}"
 
-            # 子行程光是啟動直譯器就要好幾百毫秒，所以這一發必定落在工作進行中
+            # 「同時只准一個」要在工作確實還在跑的時候問才算數。先讀一次狀態
+            # 把這件事變成斷言——原本是默默假設「子行程啟動夠慢」，那是競態，
+            # 哪天啟動變快就會變成偶發失敗，而且訊息看不出真正原因。
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/api/jobs/current") as r:
+                live = json.loads(r.read().decode("utf-8"))["job"]
+            assert live["state"] == "running", (
+                f"工作在第一次讀狀態時就已經結束（{live['state']}），"
+                "下面的 409 斷言便不成立——請改用更慢的工作重測")
             code2, j2 = _post_json(port, "/api/jobs", {"cmd": "export"})
             assert code2 == 409, f"同時只該准一個工作，卻收到 {code2}：{j2}"
 
@@ -1685,10 +1726,20 @@ def test_serve_jobs_runs_export_in_subprocess():
             code3, j3 = _post_json(port, "/api/jobs", {"cmd": "backup"})
             assert code3 == 400 and not j3["ok"], f"白名單沒擋住：{code3} {j3}"
 
-            # 使用者開著 serve 時，別的網頁不該按得動這些端點
+            # 使用者開著 serve 時，別的網頁不該按得動這些端點。POST 會起
+            # 行程，GET 會吐工作輸出（含使用者資料）——兩個都要擋，不是只擋
+            # 會寫入的那個
             code4, _ = _post_json(port, "/api/jobs", {"cmd": "export"},
                                   origin="http://evil.example")
-            assert code4 == 403, f"跨來源請求該被擋，卻收到 {code4}"
+            assert code4 == 403, f"跨來源 POST 該被擋，卻收到 {code4}"
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/jobs/current",
+                headers={"Origin": "http://evil.example"})
+            try:
+                urllib.request.urlopen(req)
+                raise AssertionError("跨來源 GET 也該被擋")
+            except urllib.error.HTTPError as e:
+                assert e.code == 403, f"跨來源 GET 該回 403，卻收到 {e.code}"
         finally:
             httpd.shutdown()
             httpd.server_close()
@@ -1709,16 +1760,31 @@ def test_control_page_modes_and_output_escaping():
     from twcrawl.workspace import Workspace
 
     hostile = '<b>惡意</b><img src=x onerror="alert(1)">'
+    # POST 回進行中（此刻還沒有輸出，與真實端點一致）、GET 回收尾＋整份輸出
     stub = """
-      ([hostile, endState, rc]) => {
+      ([hostile, endState, rc, jobId]) => {
         window.fetch = async (url, opts) => {
           const post = opts && opts.method === "POST";
           const job = post
-            ? {id: 1, name: "export", state: "running", returncode: null,
-               lines: [hostile], next: 1, dropped: 0}
-            : {id: 1, name: "export", state: endState, returncode: rc,
-               lines: ["收尾一行"], next: 2, dropped: 0};
+            ? {id: jobId, name: "export", state: "running", returncode: null,
+               lines: [], next: 0, dropped: 0}
+            : {id: jobId, name: "export", state: endState, returncode: rc,
+               lines: [hostile, "收尾一行"], next: 2, dropped: 0};
           return {status: 200, json: async () => ({ok: true, job})};
+        };
+      }
+    """
+    # 409＝別的分頁已經在跑。這不是「工作失敗」，輸出也不該被清掉
+    busy_stub = """
+      () => {
+        window.fetch = async (url, opts) => {
+          if (opts && opts.method === "POST") {
+            return {status: 409, json: async () =>
+              ({ok: false, error: "「export」還在跑"})};
+          }
+          return {status: 200, json: async () => ({ok: true, job:
+            {id: 9, name: "export", state: "running", returncode: null,
+             lines: ["別人的工作"], next: 1, dropped: 0}})};
         };
       }
     """
@@ -1748,8 +1814,8 @@ def test_control_page_modes_and_output_escaping():
                 assert page.is_visible("#panel"), "serve 之下應該有控制面板"
                 assert not page.is_visible("#need-serve")
 
-                # 成功：running（夾帶惡意字串）→ done
-                page.evaluate(stub, [hostile, "done", 0])
+                # 成功：running（輸出夾帶惡意字串）→ done
+                page.evaluate(stub, [hostile, "done", 0, 1])
                 page.click("#run-export")
                 page.wait_for_timeout(120)
                 assert "執行中" in page.inner_text("#state"), \
@@ -1763,18 +1829,56 @@ def test_control_page_modes_and_output_escaping():
                     "惡意字串應原樣顯示為文字"
 
                 # 失敗：結束碼要露出來，按鈕要能再按
-                page.evaluate(stub, [hostile, "failed", 3])
+                page.evaluate(stub, [hostile, "failed", 3, 2])
                 page.click("#run-export")
                 page.wait_for_selector("#state:has-text('失敗')", timeout=5000)
                 assert "3" in page.inner_text("#state"), "失敗要顯示結束碼"
                 assert not page.is_disabled("#run-export"), \
                     "工作結束後按鈕要能再按"
+
+                # 409：別的分頁在跑。不得顯示成「失敗」，也不得清掉輸出——
+                # 那會讓使用者以為自己的工作掛了，而真正在跑的那個從此看不到
+                page.evaluate(busy_stub)
+                page.click("#run-export")
+                page.wait_for_selector("#state:has-text('已有工作在跑')",
+                                       timeout=5000)
+                assert "失敗" not in page.inner_text("#state"), \
+                    "忙碌不是失敗，狀態燈不該講成失敗"
+                assert page.eval_on_selector(
+                    "#state", "e => !e.classList.contains('failed')"), \
+                    "忙碌不該套用失敗的樣式"
+                page.wait_for_selector("#out:has-text('別人的工作')",
+                                       timeout=5000)
                 assert not errs, f"control.html 有 JS 錯誤：{errs}"
+                page.close()
+
+                # 五頁 → 控制台的入口（ui.js 注入，只在 serve 模式出現，
+                # 所以走 file:// 的 golden 快照天生看不到它）
+                for name in ["dashboard.html", "query.html", "fda.html",
+                             "year.html", "map.html"]:
+                    p = ctx.new_page()
+                    p.goto(f"http://127.0.0.1:{port}/{name}")
+                    p.wait_for_timeout(600)
+                    assert p.eval_on_selector_all("a.ctl", "es => es.length") == 1, \
+                        f"{name} 在 serve 模式下應該有一個控制台連結"
+                    p.close()
+
+                # payload 壞掉時**更**需要進得去控制台（要按重生報表）。四頁的
+                # .sub 是 render 才建的，TW.page 在這種情形直接 return，所以
+                # 注入的掛點後備鏈在這裡才真的被用到
+                (out / "data.js").write_text("window.TWCRAWL_DATA = {};\n",
+                                             encoding="utf-8")
+                p = ctx.new_page()
+                p.goto(f"http://127.0.0.1:{port}/dashboard.html")
+                p.wait_for_timeout(600)
+                assert p.eval_on_selector_all("a.ctl", "es => es.length") == 1, \
+                    "data.js 殘缺時仍要進得去控制台——那正是最需要重生的時候"
+                p.close()
             finally:
                 httpd.shutdown()
                 httpd.server_close()
-    print("✓ 控制台頁：file:// 給說明、serve 之下三態顯示、"
-          "工作輸出不進 DOM 結構")
+    print("✓ 控制台頁：file:// 給說明、三態＋忙碌不誤示為失敗、"
+          "輸出不進 DOM 結構、五頁入口（含 payload 殘缺）")
 
 
 def test_local_rules_validation():

@@ -59,6 +59,11 @@ class _Handler(SimpleHTTPRequestHandler):
             return
         u = urlparse(self.path)
         if u.path == "/api/jobs/current":
+            # API 一律擋跨來源，GET 也不例外——工作輸出含使用者資料，
+            # 「跨來源讀不到回應」是靠瀏覽器的 CORS 政策，不該是唯一的一道
+            if not self._same_origin():
+                self._json(403, {"ok": False, "error": "不接受跨來源請求"})
+                return
             self._job_status(parse_qs(u.query))
             return
         super().do_GET()
