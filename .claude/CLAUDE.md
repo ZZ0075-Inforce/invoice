@@ -192,7 +192,9 @@ src/twcrawl/
 │                 與 fda 值不一致）、--serious（只有 dashboard 且沒人用）、--event
 │                 （只有食安頁用）、body/button.theme/h1（地圖是全視窗版面）
 ├── web/dashboard.html  月報模板（零相依 SVG 圖表、hover tooltip、亮暗切換鈕
-│                 localStorage twcrawl-theme 各頁共用；分類趨勢＝小倍數折線，
+│                 localStorage twcrawl-theme 各頁共用；統計磚含預算磚（有設定
+│                 才出現）與對獎磚（中獎另出明細卡）；消費日曆熱力格；
+│                 分類趨勢＝小倍數折線，
 │                 一分類一格、y 刻度各自獨立（分類金額差一個量級，共用刻度會把
 │                 小分類壓成平線）；FDA 命中明細卡；非必要表
 │                 只列近 10 筆其餘導查詢頁；調色盤 6 色槽過 dataviz 驗證器兩模式）
