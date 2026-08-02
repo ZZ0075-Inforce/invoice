@@ -50,7 +50,7 @@
               tr.inv
                 td  "月租費"
                 td
-                  button.linkish.pseller  "測試電信"
+                  button.linkish.goseller  "測試電信"
                 td.num  "3"
                 td.num  "599"
                 td.num  "599"
@@ -59,7 +59,7 @@
               tr.inv
                 td  "珍珠鮮奶茶"
                 td
-                  button.linkish.pseller  "珍奶測試店"
+                  button.linkish.goseller  "珍奶測試店"
                 td.num  "2"
                 td.num  "60"
                 td.num  "60"

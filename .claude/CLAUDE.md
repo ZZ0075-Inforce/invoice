@@ -301,7 +301,9 @@ src/twcrawl/
 │                 主題套用（在 <head> 同步跑，否則先亮後暗閃一下）、payload 讀取與
 │                 完整性判斷（needs 的鍵要存在，陣列還要非空）、**錯誤圍堵**——沒有
 │                 這層的話 render 中途 throw 會留下已清空的容器，畫面與「找不到
-│                 data.js」無法區分。順帶帶進 esc/nt/css/el/themeButton/catColors。
+│                 data.js」無法區分。順帶帶進 esc/nt/amt/css/el/themeButton/
+│                 catColors——`nt` 就是 `"NT$" + amt`（金額的四捨五入與千分位
+│                 一份：表格欄位不加幣別前綴、磚與 tooltip 才加）。
 │                 **是全域 TW 不是 ES module**：file:// 下 import 走 CORS 會被擋，
 │                 與 data.js 不走 fetch 同一個理由（ADR-0002）。別「現代化」。
 │                 `isServe()` 是雙模式判準的單一來源（本來各頁各寫一份）；
@@ -337,7 +339,15 @@ src/twcrawl/
 │                 偵測端算了頁面不印，對使用者而言仍是靜默丟棄，而「為什麼這個
 │                 品項不在表上」正是看到全表才會問的問題；「已排除 N 項」只計
 │                 本來會上榜的，全表標「散布 N 倍」的可能更多，文案得講清楚，
-│                 否則兩個數字看起來像其中一個在說謊）
+│                 否則兩個數字看起來像其中一個在說謊）。
+│                 跨視圖的零件收在深連結區塊後面（#25）：`expandRow`（展開列
+│                 的協定，`items-row` 這個 class 就是「已經展開了」的判準）、
+│                 `sellerCell`／`wireSeller`（跳店家查詢；掛專屬 class
+│                 `goseller` 而不是通用的 `.linkish`——同一個容器混進別的
+│                 linkish 按鈕會被一起接上，而那種錯要點下去才發現）、
+│                 `mk(tag, attrs)`（SVG 建構，月柱圖與價格折線共用）。
+│                 **單價一律 `pmoney` 不用 `nt`**：`nt` 四捨五入到整數，
+│                 同一張圖的 y 軸與 tooltip 會一個說 62.5 一個說 NT$63
 ├── web/fda.html  食安頁（總覽：來源表＋三層級判讀基準；依來源自動分頁，
 │                 事件/監測標示；深連結 ?src=<key>；月報只留磚、明細全在這）
 ├── web/year.html 年度回顧（日曆年至今：統計磚＋亮點卡＋分類佔比條＋店家
@@ -859,3 +869,20 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   `PRICE_RULE`（純呈現決策，搬過去等於把排版偏好混進匯出端判準）、README 不寫
   門檻數字（README 是給人讀的說明，固定支出段有先例）。golden 只動 query-price
   兩行、其餘四頁零差異；測試 71/71（這輪加的是斷言不是測試函式）
+- ✅ 查詢頁共用零件收編（2026-08-02，issue #25；#23 review 的 Standards 判斷
+  題）：四項裡**三項收編、一項駁回**。收編的是 `expandRow`（展開列協定原本
+  兩份，差別只有欄數與內容）、`sellerCell`／`wireSeller`（跳店家查詢的接線
+  兩份）、`mk(tag, attrs)`（SVG 建構：`priceLine` 內有一份好的，`monthBars`
+  仍是四次長字串＋setAttribute 迴圈）。接線改掛專屬 class `goseller`——原本
+  固定支出那份是 `querySelectorAll("button.linkish")`，`.linkish` 是通用樣式
+  （「另存 CSV」也是），同一個容器日後多一顆就會被一起接上。**駁回**把 `qty`
+  與 `pmoney` 併成一個格式器：數量與單價是兩個概念，而且合併會讓數量長出
+  千分位——形狀像不是收斂的理由（同 db.py 那輪的判斷）。真正有牙齒的是同一
+  類的另一件：`priceLine` 的 y 軸用 `pmoney`、tooltip 用 `nt`，**同一張圖上
+  一個說 62.5、一個說 NT$63**；tooltip 改用同一個格式器，並把散在九處的
+  `Math.round(x).toLocaleString("zh-TW")` 收成 `ui.amt`（`nt` 就是 `"NT$" +
+  amt`）。兩個新守衛還原確認變紅（tooltip 退回 `nt` 印出 NT$63、固定支出
+  少接 `wireSeller` 則按鈕還在但點了沒反應——golden 拍得到按鈕，拍不到這件
+  事，所以另加一支「兩個表的店家按鈕都要跳得動」）。golden 只動三行（class
+  名 `linkish`→`linkish.goseller`、`pseller`→`goseller`），其餘零差異；
+  測試 71/71

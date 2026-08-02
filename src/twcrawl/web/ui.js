@@ -22,7 +22,11 @@
 
   const esc = s => String(s).replace(/[&<>"]/g,
     ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]));
-  const nt = x => "NT$" + Math.round(x).toLocaleString("zh-TW");
+  // 金額的四捨五入與千分位收成一份。表格欄位不加幣別前綴（欄頭已經說了）、
+  // 磚與 tooltip 才用 nt——各寫一份 Math.round(x).toLocaleString 的話，哪天
+  // 只改到其中一邊，同一個數字會在同一頁的兩處長得不一樣
+  const amt = x => Math.round(x).toLocaleString("zh-TW");
+  const nt = x => "NT$" + amt(x);
   const css = n => getComputedStyle(document.documentElement)
     .getPropertyValue(n).trim();
   const el = (tag, cls, html) => {
@@ -163,7 +167,7 @@
     controlLink();
   }
 
-  const TW = { THEMES, esc, nt, css, el, themeButton, catColors,
+  const TW = { THEMES, esc, nt, amt, css, el, themeButton, catColors,
                unnecessaryCats, monthTotals, monthBounds, page, isServe };
   window.TW = TW;
 })();

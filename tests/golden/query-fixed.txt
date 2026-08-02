@@ -42,7 +42,7 @@
               th.num  "月化金額"
             tr
               td
-                button.linkish  "測試電信"
+                button.linkish.goseller  "測試電信"
               td.num  "599"
               td  "每月"
               td.num  "3"

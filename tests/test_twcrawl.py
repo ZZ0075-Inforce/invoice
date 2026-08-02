@@ -3916,10 +3916,12 @@ def test_query_price_view():
                            "amount": price}]}
 
     rows = [
-        # 四個價格點＋漲價（+16.7%）→ 展開要畫折線
+        # 四個價格點＋漲價（+16.7%）→ 展開要畫折線。中間那點刻意帶小數：
+        # tooltip 若用 nt() 會四捨五入成整數，同一張圖上一個說 62.5、一個
+        # 說 NT$63（中位數取前三點＝60，帶不帶小數都不影響漲幅）
         inv("P1", "2026-01-05", "測試超市", "雞蛋", 60.0),
         inv("P2", "2026-02-05", "測試超市", "雞蛋", 60.0),
-        inv("P3", "2026-03-05", "測試超市", "雞蛋", 62.0),
+        inv("P3", "2026-03-05", "測試超市", "雞蛋", 62.5),
         inv("P4", "2026-06-05", "測試超市", "雞蛋", 70.0),
         # 兩個價格點＋漲價（+10%）→ 不畫折線
         inv("P5", "2026-04-01", "珍奶測試店", "珍珠鮮奶茶", 60.0),
@@ -3962,7 +3964,9 @@ def test_query_price_view():
           const r = tr.nextElementSibling;
           out.push({ svg: r.querySelectorAll("svg").length,
                      points: r.querySelectorAll("table tr").length - 1,
-                     links: r.querySelectorAll("button.pinv").length });
+                     links: r.querySelectorAll("button.pinv").length,
+                     tips: [...r.querySelectorAll("svg title")]
+                             .map(t => t.textContent) });
           tr.click();                      // 收回去，不影響下一步
         }
         return out;
@@ -3972,6 +3976,17 @@ def test_query_price_view():
         pq.value = "文具";
         pq.dispatchEvent(new Event("input", { bubbles: true }));
         return q("#pall table tr.inv").length;
+      }
+      if (step === "goseller") {           // 兩個表的店家按鈕走同一個 helper
+        const chip = t => [...q("button.chip")].find(b => txt(b).includes(t));
+        const out = [];
+        for (const [view, sel] of [["價格追蹤", "#pall button.goseller"],
+                                   ["固定支出", "button.goseller"]]) {
+          chip(view).click();
+          document.querySelector(sel).click();
+          out.push(txt(document.querySelector("button.chip.on")));
+        }
+        return out;
       }
       if (step === "toInvoice") {          // 點價格點的發票號碼 → 發票清單
         const tr = q("#prisen table tr.inv")[1];
@@ -4011,16 +4026,25 @@ def test_query_price_view():
                 f"散布過大的仍要在全表且說明狀態，實得 {c['spreadRow']!r}")
 
             two_pt, four_pt = page.evaluate(js, "expand")
-            assert two_pt == {"svg": 0, "points": 2, "links": 2}, (
+            assert two_pt == {"svg": 0, "points": 2, "links": 2, "tips": []}, (
                 f"兩個價格點不該畫折線（一條直線＝假裝有趨勢），實得 {two_pt}")
-            assert four_pt == {"svg": 1, "points": 4, "links": 4}, (
-                f"四個價格點要畫折線，實得 {four_pt}")
+            assert (four_pt["svg"], four_pt["points"], four_pt["links"]) \
+                == (1, 4, 4), f"四個價格點要畫折線，實得 {four_pt}"
+            # 折線的 tooltip 與 y 軸要用同一個格式器：拿 nt() 會四捨五入到
+            # 整數，同一張圖上就會一個說 62.5、一個說 NT$63
+            assert any("NT$62.5" in t for t in four_pt["tips"]), (
+                f"tooltip 的單價要保留小數（與 y 軸一致），實得 {four_pt['tips']}")
 
             assert page.evaluate(js, "search") == 1, "全表搜尋應剩「文具」一列"
 
             j = page.evaluate(js, "toInvoice")
             assert j["view"] == "發票清單" and j["q"] == j["num"], (
                 f"點價格點的發票號碼要跳到發票清單並以號碼篩選，實得 {j}")
+
+            # 價格追蹤與固定支出的店家按鈕共用同一個 wireSeller——少接一邊的話
+            # 按鈕還在、只是點了沒反應，golden 拍得到按鈕卻拍不到這件事
+            assert page.evaluate(js, "goseller") == ["店家查詢", "店家查詢"], \
+                "兩個表的店家按鈕都要能跳到店家查詢"
             page.close()
     print("✓ 價格追蹤視圖：清單/三道清理的排除數/n≥3 才畫圖/全表搜尋/"
           "點發票號碼跳清單")

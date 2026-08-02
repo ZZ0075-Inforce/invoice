@@ -82,7 +82,7 @@
 TW.page({
   needs: ["invoices"],
   render(D, ui) {
-  const { css, nt, esc, el } = ui;
+  const { css, nt, amt, esc, el } = ui;
   const app = document.getElementById("app");
   const qty = v => v == null ? "—"
     : (Math.round(v * 100) / 100).toString().replace(/\.0+$/, "");
@@ -204,6 +204,41 @@ TW.page({
     } catch (_e) {}
   }
 
+  // ---- 多個視圖共用的零件 -----------------------------------------------
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const mk = (tag, attrs) => {
+    const e = document.createElementNS(SVGNS, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    return e;
+  };
+
+  /** 展開列：再點一次收回去。發票清單與價格追蹤共用同一個協定（`items-row`
+   *  這個 class 就是「已經展開了」的判準），差別只有欄數與塞什麼進去。 */
+  function expandRow(tr, cols, fill) {
+    const next = tr.nextElementSibling;
+    if (next && next.classList.contains("items-row")) { next.remove(); return; }
+    const row = el("tr", "items-row");
+    const cell = el("td");
+    cell.colSpan = cols;
+    fill(cell);
+    row.append(cell);
+    tr.after(row);
+  }
+
+  // 「跳店家查詢」的按鈕：固定支出與價格追蹤兩個表都要。用專屬 class 而不是
+  // 通用的 .linkish 掛接線——同一個容器日後混進別的 linkish 按鈕（例如
+  // 「另存 CSV」）就會被一起接上，而那種錯誤是點下去才會發現的
+  const sellerCell = name =>
+    `<td><button class="linkish goseller" data-s="${esc(name)}">` +
+    `${esc(name)}</button></td>`;
+  const wireSeller = root =>
+    root.querySelectorAll("button.goseller").forEach(b => {
+      b.addEventListener("click", () => {
+        P.set("seller", b.dataset.s);
+        show("seller");
+      });
+    });
+
   // ---- 發票清單視圖 -----------------------------------------------------
   let F;                                  // 篩選狀態（DOM 即狀態）
   function listView() {
@@ -310,7 +345,7 @@ TW.page({
           `<td${(meta[v.seller] || {}).legal
             ? ` title="登記名：${esc(meta[v.seller].legal)}"` : ""}>${
             esc(v.seller || "（無店名）")}</td><td>${esc(v.category)}</td>` +
-          `<td class="num">${Math.round(v.amount).toLocaleString("zh-TW")}</td>` +
+          `<td class="num">${amt(v.amount)}</td>` +
           `<td>${esc(v.num || "—")}${stMark(v)}${fdaMark(v)}${lotMark(v)}</td></tr>`).join("") +
         "</table>";
       wrapT.querySelectorAll("th.sortable").forEach(th => {
@@ -371,17 +406,15 @@ TW.page({
         `<tr><td>${esc(i.desc ?? "—")}${itemHit(i.desc)
           ? ' <span title="此品項出現在 FDA 命中（命中≠買到問題商品）">⚠</span>'
           : ""}</td><td class="num">${qty(i.qty)}</td>` +
-        `<td class="num">${i.price == null ? "—" : Math.round(i.price).toLocaleString("zh-TW")}</td>` +
-        `<td class="num">${i.amount == null ? "—" : Math.round(i.amount).toLocaleString("zh-TW")}</td></tr>`
+        `<td class="num">${i.price == null ? "—" : amt(i.price)}</td>` +
+        `<td class="num">${i.amount == null ? "—" : amt(i.amount)}</td></tr>`
       ).join("") + "</table>";
   }
   function toggleItems(tr, v) {
-    const next = tr.nextElementSibling;
-    if (next && next.classList.contains("items-row")) { next.remove(); return; }
-    const row = el("tr", "items-row");
-    row.innerHTML = `<td colspan="5">${v.status
-      ? `<div class="note">發票狀態：${esc(v.status)}</div>` : ""}${itemsTable(v)}</td>`;
-    tr.after(row);
+    expandRow(tr, 5, cell => {
+      cell.innerHTML = (v.status
+        ? `<div class="note">發票狀態：${esc(v.status)}</div>` : "") + itemsTable(v);
+    });
   }
 
   // ---- 店家查詢視圖 -----------------------------------------------------
@@ -482,7 +515,7 @@ TW.page({
         ss.map(s =>
           `<tr><td><button class="linkish pick" data-n="${esc(s.name)}">${
             esc(s.name)}</button></td>` +
-          `<td class="num">${Math.round(s.total).toLocaleString("zh-TW")}</td>` +
+          `<td class="num">${amt(s.total)}</td>` +
           `<td class="num">${s.count}</td></tr>`).join("") + "</table>";
       lt.querySelectorAll("button.pick").forEach(b =>
         b.addEventListener("click", () => {
@@ -576,7 +609,7 @@ TW.page({
           top.map(([k, s]) =>
             `<tr><td><button class="linkish itemq" data-q="${esc(k)}">${esc(k)}</button></td>` +
             `<td class="num">${s.n}</td>` +
-            `<td class="num">${Math.round(s.amt).toLocaleString("zh-TW")}</td></tr>`
+            `<td class="num">${amt(s.amt)}</td></tr>`
           ).join("") + "</table>";
         it.querySelectorAll("button.itemq").forEach(btn => {
           btn.addEventListener("click", () => {
@@ -593,7 +626,7 @@ TW.page({
         "<table><tr><th>日期</th><th class=\"num\">金額</th><th>發票號碼</th></tr>" +
         invs.map((v, i) =>
           `<tr class="inv" data-i="${i}"><td>${v.date}</td>` +
-          `<td class="num">${Math.round(v.amount).toLocaleString("zh-TW")}</td>` +
+          `<td class="num">${amt(v.amount)}</td>` +
           `<td>${esc(v.num || "—")}${stMark(v)}${fdaMark(v)}${lotMark(v)}</td></tr>`).join("") + "</table>";
       lt.querySelectorAll("tr.inv").forEach(tr => {
         tr.addEventListener("click", evt => {
@@ -608,38 +641,29 @@ TW.page({
   function monthBars(months) {
     const W = 1000, H = 170, mT = 20, mB = 24, mL = 58, mR = 8;
     const iw = W - mL - mR, ih = H - mT - mB;
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    const svg = mk("svg", { viewBox: `0 0 ${W} ${H}` });
     const max = Math.max(1, ...months.map(m => m.v));
     const years = new Set(months.map(m => m.month.slice(0, 4)));
     const lab = m => years.size > 1
       ? m.month.slice(2, 4) + "/" + m.month.slice(5)
       : Number(m.month.slice(5)) + "月";
     const y = v => mT + ih - v / max * ih;
-    const base = document.createElementNS("http://www.w3.org/2000/svg", "line");
-    for (const [attr, val] of Object.entries({ x1: mL, x2: W - mR, y1: y(0), y2: y(0),
-      stroke: css("--baseline"), "stroke-width": 1 })) base.setAttribute(attr, val);
-    svg.append(base);
+    svg.append(mk("line", { x1: mL, x2: W - mR, y1: y(0), y2: y(0),
+      stroke: css("--baseline"), "stroke-width": 1 }));
     const band = iw / months.length, bw = Math.min(24, band * 0.55);
     months.forEach((m, i) => {
       const cx = mL + band * (i + 0.5);
       if (m.v > 0) {
-        const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-        for (const [attr, val] of Object.entries({
-          x: cx - bw / 2, y: y(m.v), width: bw, height: Math.max(y(0) - y(m.v), 1),
-          rx: 3, fill: css("--s1") })) r.setAttribute(attr, val);
-        svg.append(r);
-        const cap = document.createElementNS("http://www.w3.org/2000/svg", "text");
-        for (const [attr, val] of Object.entries({ x: cx, y: y(m.v) - 5,
-          "text-anchor": "middle", "font-size": 10.5, fill: css("--text-2") }))
-          cap.setAttribute(attr, val);
-        cap.textContent = Math.round(m.v).toLocaleString("zh-TW");
+        svg.append(mk("rect", {
+          x: cx - bw / 2, y: y(m.v), width: bw,
+          height: Math.max(y(0) - y(m.v), 1), rx: 3, fill: css("--s1") }));
+        const cap = mk("text", { x: cx, y: y(m.v) - 5,
+          "text-anchor": "middle", "font-size": 10.5, fill: css("--text-2") });
+        cap.textContent = amt(m.v);
         svg.append(cap);
       }
-      const xl = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      for (const [attr, val] of Object.entries({ x: cx, y: H - 6,
-        "text-anchor": "middle", "font-size": 11, fill: css("--muted") }))
-        xl.setAttribute(attr, val);
+      const xl = mk("text", { x: cx, y: H - 6,
+        "text-anchor": "middle", "font-size": 11, fill: css("--muted") });
       xl.textContent = lab(m);
       svg.append(xl);
     });
@@ -684,20 +708,15 @@ TW.page({
       "<th>週期</th><th class=\"num\">次數</th><th>首次</th><th>最近</th>" +
       "<th>下次預估</th><th>狀態</th><th class=\"num\">月化金額</th></tr>" +
       found.map(x =>
-        `<tr><td><button class="linkish" data-s="${esc(x.seller)}">${esc(x.seller)}</button></td>` +
-        `<td class="num">${Math.round(x.amount).toLocaleString("zh-TW")}</td>` +
+        "<tr>" + sellerCell(x.seller) +
+        `<td class="num">${amt(x.amount)}</td>` +
         `<td>${esc(x.periodLabel)}</td><td class="num">${x.n}</td>` +
         `<td>${x.first}</td><td>${x.last}</td>` +
         `<td>${x.next || "—"}</td>` +
         `<td class="${x.active ? "ok" : "off"}">${x.active ? "進行中" : "疑似已停"}</td>` +
-        `<td class="num">${Math.round(x.monthly).toLocaleString("zh-TW")}</td></tr>`
+        `<td class="num">${amt(x.monthly)}</td></tr>`
       ).join("") + "</table>";
-    wrapT.querySelectorAll("button.linkish").forEach(b => {
-      b.addEventListener("click", () => {
-        P.set("seller", b.dataset.s);
-        show("seller");
-      });
-    });
+    wireSeller(wrapT);
     card.append(wrapT);
     body.append(card);
   }
@@ -705,19 +724,15 @@ TW.page({
   // ---- 價格追蹤視圖 -----------------------------------------------------
   // 配對、三道清理與漲價判定全在 export.py 的 _detect_price，這裡只排版；
   // 門檻數字由 payload 帶過來（同 fixedRule），改了門檻文案自動跟著改。
-  const SVGNS = "http://www.w3.org/2000/svg";
   const CHART_MIN_POINTS = 3;   // 兩點的折線是一條直線，畫出來只是假裝有趨勢
+  // 單價保留小數（60.5 元是真的），所以不能用 nt——它四捨五入到整數，
+  // 同一張圖的 y 軸與 tooltip 會一個說 60.5 一個說 NT$61
   const pmoney = v => v == null ? "—"
     : (Math.round(v * 100) / 100).toLocaleString("zh-TW");
 
   function priceLine(pts) {
     const W = 900, H = 150, mT = 14, mB = 26, mL = 56, mR = 14;
     const iw = W - mL - mR, ih = H - mT - mB;
-    const mk = (tag, attrs) => {
-      const e = document.createElementNS(SVGNS, tag);
-      for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
-      return e;
-    };
     const svg = mk("svg", { viewBox: `0 0 ${W} ${H}` });
     const vals = pts.map(p => p.price);
     const lo = Math.min(...vals), hi = Math.max(...vals);
@@ -741,8 +756,9 @@ TW.page({
     pts.forEach((p, i) => {
       const c = mk("circle", { cx: x(i), cy: y(p.price), r: 3.5,
         fill: css("--s1") });
-      const ti = document.createElementNS(SVGNS, "title");
-      ti.textContent = `${p.date}　${nt(p.price)}`;   // textContent：品名以外一律不進標記
+      const ti = mk("title", {});
+      // textContent：品名以外一律不進標記。單價與 y 軸用同一個格式器
+      ti.textContent = `${p.date}　NT$${pmoney(p.price)}`;
       c.append(ti);
       svg.append(c);
     });
@@ -772,27 +788,22 @@ TW.page({
   }
 
   function togglePoints(tr, p, cols) {
-    const next = tr.nextElementSibling;
-    if (next && next.classList.contains("items-row")) { next.remove(); return; }
-    const row = el("tr", "items-row");
-    const cell = el("td");
-    cell.colSpan = cols;
-    if (p.n >= CHART_MIN_POINTS) {
-      const box = el("div", "pchart");
-      box.append(priceLine(p.points));
-      cell.append(box);
-    }
-    const tb = el("div", null, pointsTable(p));
-    cell.append(tb);
-    tb.querySelectorAll("button.pinv").forEach(b => {
-      b.addEventListener("click", () => {
-        P.set("q", b.dataset.n);      // 發票號碼進關鍵字＝清單只剩那一張
-        P.delete("cat");
-        show("list");
+    expandRow(tr, cols, cell => {
+      if (p.n >= CHART_MIN_POINTS) {
+        const box = el("div", "pchart");
+        box.append(priceLine(p.points));
+        cell.append(box);
+      }
+      const tb = el("div", null, pointsTable(p));
+      cell.append(tb);
+      tb.querySelectorAll("button.pinv").forEach(b => {
+        b.addEventListener("click", () => {
+          P.set("q", b.dataset.n);    // 發票號碼進關鍵字＝清單只剩那一張
+          P.delete("cat");
+          show("list");
+        });
       });
     });
-    row.append(cell);
-    tr.after(row);
   }
 
   function priceView() {
@@ -827,11 +838,6 @@ TW.page({
     card.append(tiles);
 
     const COLS = 7;
-    const toSeller = wrap => wrap.querySelectorAll("button.pseller").forEach(b => {
-      b.addEventListener("click", () => { P.set("seller", b.dataset.s); show("seller"); });
-    });
-    const sellerCell = p =>
-      `<td><button class="linkish pseller" data-s="${esc(p.seller)}">${esc(p.seller)}</button></td>`;
     const lastCell = p => `<td${p.stale ? ' class="off"' : ""}>${p.last}` +
       (p.stale ? `（${p.daysSince} 天沒買了）` : "") + "</td>";
 
@@ -850,7 +856,7 @@ TW.page({
         "<th class=\"num\">價格點</th><th>上次購買</th></tr>" +
         risen.map((p, i) =>
           `<tr class="inv" data-i="${i}"><td>${esc(p.desc)}</td>` +
-          sellerCell(p) +
+          sellerCell(p.seller) +
           `<td class="num">${pmoney(p.base)}</td>` +
           `<td class="num">${pmoney(p.latest)}</td>` +
           `<td class="num">+${p.pct}%</td>` +
@@ -862,7 +868,7 @@ TW.page({
           togglePoints(tr, risen[+tr.dataset.i], COLS);
         });
       });
-      toSeller(t);
+      wireSeller(t);
       rc.append(t);
     }
     // 「已排除 N 項」只計本來會上榜的；全表標「散布 N 倍」的可能更多（那些
@@ -910,7 +916,7 @@ TW.page({
         "<th class=\"num\">最高</th><th>上次購買</th><th>狀態</th></tr>" +
         rows.map((p, i) =>
           `<tr class="inv" data-i="${i}"><td>${esc(p.desc)}</td>` +
-          sellerCell(p) +
+          sellerCell(p.seller) +
           `<td class="num" title="${p.spanDays} 天內">${p.n}</td>` +
           `<td class="num">${pmoney(p.min)}</td>` +
           `<td class="num">${pmoney(p.max)}</td>` + lastCell(p) +
@@ -926,7 +932,7 @@ TW.page({
           togglePoints(tr, rows[+tr.dataset.i], COLS);
         });
       });
-      toSeller(fwrap);
+      wireSeller(fwrap);
     }
     pq.addEventListener("input", paintFull);
     paintFull();
