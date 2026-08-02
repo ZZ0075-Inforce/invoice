@@ -16,9 +16,10 @@ import shutil
 from collections import defaultdict
 from pathlib import Path
 from statistics import median
+from typing import NamedTuple
 
 from . import db
-from .categories import Classifier, UNCATEGORIZED
+from .categories import Category, Classifier, UNCATEGORIZED
 from .workspace import Workspace
 
 # 五頁模板與共用資產（ui.css）的來源目錄；package-relative，不隨工作區走
@@ -41,10 +42,16 @@ def _seller_info(conn, cl: Classifier, industries: dict[str, str]) -> dict[str, 
             "select seller_name, max(seller_ban) from invoices "
             "where seller_name is not null group by seller_name"):
         cat = cl.for_seller(sname)
-        r = reg.get(str(ban).strip() if ban else "")
+        ban = str(ban).strip() if ban else None
+        r = reg.get(ban or "")
         info[sname] = {
             "display": cl.display_name(sname),
             "legal": sname, "category": cat.name, "source": cat.source,
+            # ban 只有 CSV 在讀（payload 的 sellers[] 逐鍵挑，加這個鍵不影響
+            # data.js）。取的是**該店家名下任一非空**的統編，與 industry 同
+            # 一條規則——半數發票不帶統編，逐張取會讓同一家店有些列有、有些
+            # 列空，在樞紐表裡看起來像資料壞了
+            "ban": ban,
             "industry": industries.get(sname),
             "address": r.address if r else None,
             "lat": r.lat if r else None,
@@ -380,36 +387,74 @@ def _detect_price(inv_rows: list[dict]) -> dict:
     return {"pairs": risen + rest, "stats": stats}
 
 
-def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
-    """衍生儀表板資料。需要工作區的兩條路徑：比對報告與雲端獎清冊快取。"""
-    # 稅籍行業後備一律在這裡接上：Classifier 可能是在拿到 conn 之前建的
-    # （serve、測試都是），少接不會報錯、只會讓兩成店家靜默掉回未分類。
+class InvoiceRow(NamedTuple):
+    """一張發票在衍生層的三個面。
+
+    `row` 是進 payload／CSV 的那一份；`cat` 與 `si` 是聚合（月報磚、分類、
+    店家）與 CSV 的額外欄位（非必要、統編、行業）要的。三個一起出，兩個
+    呼叫端才不必各自再組一次分類鏈——組法有第二份的話，CSV 會跟五頁講不
+    一樣的分類，而那種不一致是靜默的。
+    """
+    row: dict
+    cat: Category
+    si: dict
+
+
+def invoice_rows(conn, classifier: Classifier) -> tuple[list[InvoiceRow],
+                                                        dict[str, dict]]:
+    """發票在衍生層的樣子：分類（含品項覆寫）、招牌名、狀態中文在這裡定案。
+
+    `build_payload`（五頁）與 `csvout`（指令級匯出）共用這一支。順帶回傳
+    店家層資訊 `info`——payload 的 sellers[]、對獎的顯示名、未分類清單都還
+    要用它，而它本來就是在這裡算出來的。
+
+    稅籍行業後備一律在這裡接上：Classifier 可能是在拿到 conn 之前建的
+    （serve、測試都是），少接不會報錯、只會讓兩成店家靜默掉回未分類。
+    """
     industries = db.seller_industries(conn)
     cl = classifier.with_industries(industries)
     info = _seller_info(conn, cl, industries)
-    top_items = _top_items(conn)
-    # amount 的非空保護留在這裡：只有月報在加總，其他讀取端不需要它
-    invs = [v for v in db.invoices(conn) if v.amount is not None]
-
     items = _items_by_invoice(conn)
     # 單一 caller 的一次性查詢，照 db.py 的界線留在原地；翻譯在這裡做完，
-    # 頁面拿到的就是中文（或未收錄的原始碼），不再解讀狀態碼
+    # 頁面與 CSV 拿到的就是中文（或未收錄的原始碼），不再解讀狀態碼
     status_raw = dict(conn.execute("select inv_num, inv_status from invoices"))
-    months: dict[str, dict] = {}
-    cats: dict[str, dict] = {}
-    sellers: dict[str, dict] = {}
-    invoice_rows: list[dict] = []
-
-    for num, inv_date, seller, amount in invs:
-        m = str(inv_date)[:7]
+    out: list[InvoiceRow] = []
+    # amount 的非空保護留在這裡：只有加總的人需要它，其他讀取端不需要
+    for num, inv_date, seller, amount in db.invoices(conn):
+        if amount is None:
+            continue
         si = info.get(seller) or {"display": seller or "（無店名）",
                                   "legal": seller, "category": UNCATEGORIZED,
-                                  "industry": None, "address": None,
-                                  "lat": None, "lon": None}
+                                  "ban": None, "industry": None,
+                                  "address": None, "lat": None, "lon": None}
         inv_items = items.get(num, [])
         # 品項覆寫（發票層級）：跨業態店家（好市多加油站）靠品項關鍵字改
         # 單張發票的分類；店家本身的業態分類（sellers、地圖）不動
         cat = cl.for_invoice(seller, (i["desc"] for i in inv_items))
+        st = status_raw.get(num)
+        out.append(InvoiceRow(
+            row={"num": num, "date": str(inv_date)[:10],
+                 "seller": si["display"], "category": cat.name,
+                 "amount": amount, "items": inv_items,
+                 "status": INVOICE_STATUS_ZH.get(st, st),
+                 "statusFlagged": st not in _STATUS_NORMAL},
+            cat=cat, si=si))
+    return out, info
+
+
+def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
+    """衍生儀表板資料。需要工作區的兩條路徑：比對報告與雲端獎清冊快取。"""
+    rows, info = invoice_rows(conn, classifier)
+    top_items = _top_items(conn)
+    months: dict[str, dict] = {}
+    cats: dict[str, dict] = {}
+    sellers: dict[str, dict] = {}
+    inv_rows = [r.row for r in rows]
+
+    for r in rows:
+        v, cat, si = r.row, r.cat, r.si
+        seller, amount = si["legal"], v["amount"]
+        m = v["date"][:7]
         mon = months.setdefault(m, {"month": m, "total": 0.0, "count": 0,
                                     "byCategory": defaultdict(float)})
         mon["total"] += amount
@@ -432,12 +477,6 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
         # 非必要消費不另存一份清單：判準是 categories[].unnecessary 這個旗標，
         # 頁面用它篩 invoices 就好——以前兩種編碼並存，查詢頁用旗標、月報用
         # 清單，同一件事兩個答案
-        st = status_raw.get(num)
-        invoice_rows.append({"num": num, "date": str(inv_date)[:10],
-                             "seller": si["display"], "category": cat.name,
-                             "amount": amount, "items": inv_items,
-                             "status": INVOICE_STATUS_ZH.get(st, st),
-                             "statusFlagged": st not in _STATUS_NORMAL})
 
     for mon in months.values():
         mon["byCategory"] = dict(mon["byCategory"])
@@ -517,13 +556,13 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
     # 年度回顧（issue #13）：日曆年至今的全貌，統計與亮點都是「Python 決定
     # 的事實」，頁面只排版不重複聚合。年度＝庫內最新發票的年份，不用牆上
     # 時鐘——一月還沒抓新資料時不會出一頁空回顧，golden 也不吃當下日期。
-    # 同額並列時取最早的（invoice_rows 依日期升冪，max 回傳第一個最大值）。
+    # 同額並列時取最早的（inv_rows 依日期升冪，max 回傳第一個最大值）。
     # 這是第四份 rollup 迴圈（月度/分類/店家之後）——by_cat 雖可由 months
     # 導出，但 by_day 與 maxInvoice 只有列級資料算得出，一個迴圈掃完最直白。
     year = None
-    if invoice_rows:
-        yr = max(v["date"] for v in invoice_rows)[:4]
-        yr_rows = [v for v in invoice_rows if v["date"].startswith(yr)]
+    if inv_rows:
+        yr = max(v["date"] for v in inv_rows)[:4]
+        yr_rows = [v for v in inv_rows if v["date"].startswith(yr)]
         unn_cats = {c["name"] for c in cats.values() if c["unnecessary"]}
         by_cat: dict[str, float] = defaultdict(float)
         by_seller: dict[str, dict] = {}
@@ -591,11 +630,11 @@ def build_payload(conn, ws: Workspace, classifier: Classifier) -> dict:
 
     payload = {
         "generatedAt": _dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "invoiceCount": len(invs),
-        "invoices": invoice_rows,
-        "fixed": _detect_fixed(invoice_rows),
+        "invoiceCount": len(inv_rows),
+        "invoices": inv_rows,
+        "fixed": _detect_fixed(inv_rows),
         "fixedRule": FIXED_RULE,
-        "price": _detect_price(invoice_rows),
+        "price": _detect_price(inv_rows),
         "priceRule": PRICE_RULE,
         "months": [months[k] for k in sorted(months)],
         "categories": cat_rows,

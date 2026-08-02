@@ -64,6 +64,14 @@ class Workspace:
         return self.out / "match_report.csv"
 
     @property
+    def csv_invoices(self) -> Path:
+        return self.out / "invoices.csv"
+
+    @property
+    def csv_items(self) -> Path:
+        return self.out / "items.csv"
+
+    @property
     def bizreg_cache(self) -> Path:
         return self.out / "bgmopen1.zip"
 

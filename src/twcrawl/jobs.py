@@ -114,6 +114,7 @@ def _import(params: dict) -> tuple[Steps, str]:
 # （CLAUDE.md「已知的坑」），控制台沒有這顆的話那句話就沒有出口。
 ALLOWED: dict[str, Callable[[dict], tuple[Steps, str]]] = {
     "export": _no_params(EXPORT_STEP, "重生報表"),
+    "csv": _no_params(["csv"], "匯出 CSV"),
     "update": _no_params(["update", "--no-open"], "每月例行"),
     "login": _no_params(["login"], "登入"),
     "fetch": _fetch,

@@ -93,6 +93,9 @@
       <button class="run" id="run-update">▶ 每月例行</button>
       <button class="run" id="run-login">登入</button>
       <button class="run" id="run-export">重生報表</button>
+      <!-- 匯出 CSV 不給檔案連結：瀏覽器不讓 http://127.0.0.1 的頁面連
+           file://，所以路徑只能印在輸出裡（指令自己會印） -->
+      <button class="run" id="run-csv">匯出 CSV</button>
       <span class="st idle" id="state">閒置</span>
       <button class="stop" id="cancel" hidden>中止</button>
     </div>
@@ -156,8 +159,8 @@
   const HANDOFF = document.getElementById("handoff");
   const CANCEL = document.getElementById("cancel");
   const LINKS = document.getElementById("done-links");
-  const RUNS = ["run-update", "run-login", "run-export", "run-fetch",
-                "run-import"].map((id) => document.getElementById(id));
+  const RUNS = ["run-update", "run-login", "run-export", "run-csv",
+                "run-fetch", "run-import"].map((id) => document.getElementById(id));
 
   try {
     if (!window.TW) throw new Error("ui.js 沒有載入");
@@ -296,6 +299,8 @@
       .addEventListener("click", () => run("login"));
     document.getElementById("run-export")
       .addEventListener("click", () => run("export"));
+    document.getElementById("run-csv")
+      .addEventListener("click", () => run("csv"));
     document.getElementById("run-fetch").addEventListener("click", () => run(
       "fetch", {from: document.getElementById("from").value,
                 to: document.getElementById("to").value}));

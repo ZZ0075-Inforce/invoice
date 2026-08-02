@@ -84,6 +84,7 @@ twcrawl fda --since 2026-03-01             # 更新問題商品清單
 twcrawl match --since 2026-03-01           # 比對，輸出 out\match_report.csv
 twcrawl lottery                            # 統一發票對獎（傳統獎＋雲端專屬獎）
 twcrawl export                             # 衍生消費分析五頁（跑完自動開啟，--no-open 關）
+twcrawl csv                                # 倒兩份 CSV 給試算表（invoices + items）
 ```
 
 ### 1. `login` — 人工登入
@@ -256,7 +257,7 @@ twcrawl export --no-open  # 只產出，不開瀏覽器
 #### 控制台：從頁面按按鈕跑工作
 
 `serve` 之下還多一頁**控制台**（各頁右上的「🎛 控制台」進得去，或雙擊
-`twcrawl-console.bat` 直接開）。五顆按鈕：
+`twcrawl-console.bat` 直接開）。六顆按鈕：
 
 | 按鈕 | 做的事 |
 |---|---|
@@ -265,6 +266,7 @@ twcrawl export --no-open  # 只產出，不開瀏覽器
 | **抓發票** | 指定起訖月份的 `fetch`，逐月進度即時顯示 |
 | **匯入** | 貼上 CSV 路徑跑 `import`，**跑完自動重生報表**並給出可點的連結 |
 | **重生報表** | `export` |
+| **匯出 CSV** | `csv`；路徑印在輸出裡（瀏覽器不讓網頁連本機檔案，所以不給連結） |
 
 輸出即時顯示在頁面上；某步失敗時其餘照跑、結尾有彙總，頁面看得出是哪一步。
 進行中可以**中止**，連底下的瀏覽器一起收掉，不留半死的行程。
@@ -301,7 +303,29 @@ tooltip 與未分類清單顯示行業和常買品項——判斷「這家到底
 注意：**地圖頁開啟時會載入 OpenStreetMap 圖磚**（主儀表板維持零外連）；
 查詢的地址是公開商工登記資料，消費資料本身不出去。
 
-### 6. `lottery` — 統一發票對獎
+### 6. `csv` — 倒給試算表
+
+```powershell
+twcrawl csv     # → out\invoices.csv（一列一發票）、out\items.csv（一列一品項）
+```
+
+五頁是預先設計好的視角，「某類店家這半年的單價分布」這種臨時問題它答不了。
+`csv` 把庫內資料整份倒出來（不分期間、不必先篩），拿去 Excel 或 Google Sheets
+自己樞紐。中文表頭、UTF-8 BOM、Excel 雙擊直開。
+
+兩份檔以**發票號碼**關聯；`items.csv` 另外重複帶了日期、店家、分類三欄，
+所以只看品項時不必先做 VLOOKUP。分類、招牌名、發票狀態與五頁是同一份實作，
+不會兩邊講不一樣。
+
+**為什麼是兩份而不是一份**：部分發票的明細加總本來就與發票金額不同（折讓、
+平台湊整）。合成一張寬表的話，加總品項金額會與月報差一截、加總重複填的發票
+金額則會重複計算——兩種錯法都很容易發生。分成兩份，「哪一種加總是對的」才
+是你選得出來的事：**要對總額用 `invoices.csv`**，要看品項用 `items.csv`。
+不一致的張數每次匯出都會印在摘要裡。
+
+查詢頁的「另存 CSV」是另一回事：那匯出的是**目前畫面上篩出來的**發票。
+
+### 7. `lottery` — 統一發票對獎
 
 ```powershell
 twcrawl lottery                # 傳統獎項＋雲端發票專屬獎
@@ -316,7 +340,7 @@ twcrawl lottery --no-cloud     # 跳過雲端專屬獎清冊（首抓全部獎�
 結果進月報的對獎磚與中獎明細卡（含領獎期限），查詢頁的發票列標 🎉。
 中獎受領獎期限約束，過期不再比對。
 
-### 7. `backup` / `restore` — 加密備份包與還原
+### 8. `backup` / `restore` — 加密備份包與還原
 
 ```powershell
 twcrawl backup                             # 互動輸入密碼，或設 TWCRAWL_BACKUP_PASSWORD
@@ -353,7 +377,7 @@ twcrawl restore out\backup\twcrawl-backup-20260802-0029.zip
 > 這條路實際演練過（2026-08-02）：真實資料庫備份 → 空目錄還原 → `export`
 > 五頁全數產出，筆數與原工作區一致。
 
-### 8. `update` — 每月例行一鍵跑完
+### 9. `update` — 每月例行一鍵跑完
 
 ```powershell
 twcrawl update                # 登入 → fetch（自動補到當月）→ fda → match → lottery → export → backup
@@ -425,6 +449,7 @@ twcrawl probe <url> # 頁面結構偵察報告（表格 id、表頭、分頁連�
 | `out\twcrawl.sqlite` | `invoices` / `invoice_items` / `fda_rows` / `biz_registry` / `lottery_draws` |
 | `out\dashboard.html` + `out\query.html` + `out\fda.html` + `out\year.html` + `out\data.js` | 月報、查詢頁、食安頁、年度回顧（雙擊即開、離線） |
 | `out\map.html` + `out\vendor\` | 消費地圖（開啟時載入 OSM 圖磚） |
+| `out\invoices.csv` + `out\items.csv` | `twcrawl csv` 的產物：一份一列一發票、一份一列一品項，以發票號碼關聯 |
 | `out\match_report.csv` | 比對結果（UTF-8 BOM，Excel 可直接開） |
 | `out\fda_*.csv` | 問題商品清單 |
 | `out\backup\` | AES-256 加密備份包（唯一可上雲的產物；含資料庫、`captures\` 與個人設定） |
@@ -444,7 +469,7 @@ twcrawl probe <url> # 頁面結構偵察報告（表格 id、表頭、分頁連�
 ## 測試
 
 ```powershell
-python tests\test_twcrawl.py                    # 71 個測試，不需要 pytest
+python tests\test_twcrawl.py                    # 72 個測試，不需要 pytest
 python tests\test_twcrawl.py --update-golden    # 有意改動畫面後重生頁面快照
 ```
 

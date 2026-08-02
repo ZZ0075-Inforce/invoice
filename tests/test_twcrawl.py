@@ -1746,6 +1746,101 @@ def test_export_items_and_query_page():
     print("✓ export：品項與發票號碼進 data.js、查詢頁就位、載具號碼排除")
 
 
+def test_csv_export_shapes_and_bytes():
+    """指令級 CSV 匯出（issue #26）：兩份檔的形狀、位元組慣例、不一致計數。"""
+    import csv as csv_mod
+    from twcrawl import commands, csvout, jobs
+    from twcrawl.categories import Classifier
+    from twcrawl.workspace import Workspace
+
+    with TemporaryDirectory() as td:
+        ws = Workspace(Path(td))
+        conn = db.connect(ws.db)
+        try:
+            db.upsert_invoices(conn, [
+                # 明細加總＝發票金額
+                an_invoice("CV1", "2026-05-03", "測試超市", 160.0,
+                           seller_ban="12345678", card_no="/SECRET99",
+                           inv_status="INVOICE0003S"),
+                # 明細加總 ≠ 發票金額（同一家店，但這張沒帶統編）
+                an_invoice("CV2", "2026-05-04", "測試超市", 100.0),
+                # 沒有明細：那是「還沒抓到明細」，不算對不起來
+                an_invoice("CV3", "2026-05-05", "測試藥妝", 30.0),
+            ])
+            db.upsert_items(conn, [
+                an_item("CV1", 1, "雞蛋", 60.0, quantity=1, unit_price=60.0),
+                # 品名含逗號、引號與換行——不跳脫的話整張表會被打散
+                an_item("CV1", 2, '牛奶,"大罐"\n第二行', 100.0, quantity=2,
+                        unit_price=50.0),
+                an_item("CV2", 1, "零食", 125.0, quantity=2, unit_price=62.5),
+            ])
+            res = csvout.write_csv(conn, ws, Classifier(ws.rules))
+        finally:
+            conn.close()
+
+        assert (res["n_invoices"], res["n_items"], res["mismatched"]) \
+            == (3, 3, 1), f"筆數或不一致數不對：{res}"
+        # 算了不印就等於沒算：使用者第一次做樞紐才會撞到，而那時沒有線索
+        msg = commands.format_csv(res)
+        assert "1 張" in msg and "以發票金額為準" in msg, \
+            f"摘要一定要點名明細加總對不起來的張數：{msg!r}"
+
+        raw = ws.csv_invoices.read_bytes()
+        assert raw.startswith(b"\xef\xbb\xbf"), \
+            "要有 UTF-8 BOM，否則 Excel 雙擊開是亂碼"
+        # 每一欄都加引號（含數字欄）——與查詢頁的「另存 CSV」同一套慣例。
+        # csv.reader 對兩種寫法都讀得回來，所以這條只能驗位元組
+        assert raw.startswith('﻿"日期","店家"'.encode()) \
+            and b'"160"' in raw, "每一欄都要加引號，數字欄也是"
+        assert raw.count(b"\n") == raw.count(b"\r\n") == 4, \
+            "換行一律 CRLF（表頭＋3 列），不得混進裸 LF"
+        assert b"SECRET99" not in raw + ws.csv_items.read_bytes(), \
+            "載具號碼永不進 CSV（同 ADR-0002 對 data.js 那條）"
+
+        def read(path):
+            with path.open(encoding="utf-8-sig", newline="") as f:
+                return list(csv_mod.reader(f))
+
+        inv, items = read(ws.csv_invoices), read(ws.csv_items)
+        assert inv[0] == csvout.INVOICE_HEADER, inv[0]
+        assert items[0] == csvout.ITEM_HEADER, items[0]
+        # 品名裡的換行留在引號內：讀回來仍是 3 列，不是 4 列
+        assert len(items) == 4, "含逗號／引號／換行的品名不得把表格打散"
+        assert items[2][5] == '牛奶,"大罐"\n第二行', items[2]
+
+        by_num = {r[7]: r for r in inv[1:]}
+        for r in items[1:]:
+            src = by_num[r[0]]
+            assert (r[1], r[2], r[3]) == (src[0], src[1], src[4]), \
+                f"items 的冗餘三欄要與 invoices 同一張發票逐字相同：{r}"
+        assert [r[4] for r in items[1:] if r[0] == "CV1"] == ["1", "2"], \
+            "序號是該張發票內的第幾列"
+        assert by_num["CV2"][2] == "12345678", \
+            "統編取店家名下任一非空的——逐張取會讓同一家店有些列空著"
+        assert by_num["CV1"][8] == "開立", "狀態要是中文（與五頁同一份對照）"
+        assert by_num["CV1"][6] == "160", "整數金額不留 .0"
+        assert items[3][7] == "62.5", "單價不四捨五入——捨掉會與價格追蹤對不起來"
+
+    # 空工作區：檔案要在，只是沒有列。檔案不見了比「零列」難判讀得多
+    with TemporaryDirectory() as td:
+        ws = Workspace(Path(td))
+        conn = db.connect(ws.db)
+        try:
+            res = csvout.write_csv(conn, ws, Classifier(ws.rules))
+        finally:
+            conn.close()
+        assert res["n_invoices"] == 0 and res["mismatched"] == 0, res
+        assert ws.csv_invoices.exists() and ws.csv_items.exists(), \
+            "沒有資料也要寫出只有表頭的兩個檔"
+
+    # 控制台白名單：收得下 csv、不吃參數，且**不宣稱重生報表**
+    steps, title = jobs.ALLOWED["csv"]({})
+    assert steps == [["csv"]] and title == "匯出 CSV", (steps, title)
+    assert "csv" not in jobs.REGENERATING, \
+        "匯出 CSV 不重生五頁，對它說「報表已更新」是假話"
+    print("✓ CSV 匯出：兩份檔的形狀／BOM 與 CRLF／跳脫／冗餘欄一致／不一致計數")
+
+
 def test_serve_rules_writeback():
     import threading
     import urllib.request

@@ -101,6 +101,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_exp.add_argument("--no-open", action="store_true", help="產出後不自動開啟儀表板")
 
+    sub.add_parser(
+        "csv",
+        help="匯出 out/invoices.csv 與 out/items.csv（拿去 Excel／Sheets 自己樞紐）",
+    )
+
     p_srv = sub.add_parser(
         "serve",
         help="本機小站（只綁 127.0.0.1）：同一套頁面＋分類寫回 categories.local.json（ADR-0002）",
@@ -217,6 +222,13 @@ def _dispatch(args: argparse.Namespace, ws: Workspace) -> int:
         ws.require_db()
         with _db(ws.db) as conn:
             commands.cmd_export(conn, ws, open_browser=not args.no_open)
+        return 0
+
+    if args.cmd == "csv":
+        ws.require_db()
+        with _db(ws.db) as conn:
+            res = commands.cmd_csv(conn, ws)
+        print(commands.format_csv(res))
         return 0
 
     if args.cmd == "backup":

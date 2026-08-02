@@ -32,6 +32,7 @@ twcrawl match --since 2026-03-01      # 比對，輸出 out/match_report.csv
 twcrawl lottery                       # 對獎：傳統獎＋雲端專屬獎（首抓清冊約 247MB 入快取）
                                       #   --offline 免連網、--no-cloud 跳過雲端清冊
 twcrawl export                        # 衍生五頁 out/：dashboard+query+fda+year+map；自動開頁，--no-open 關
+twcrawl csv                           # out/invoices.csv＋out/items.csv（給試算表樞紐；無參數）
 twcrawl serve                         # 本機小站（127.0.0.1）：同頁面＋歸類寫回 categories.local.json
                                       #   ＋控制台頁（control.html）：每月例行／登入／抓區間／匯入／
                                       #   重生報表都從頁面按鈕起，含登入交接與中止；
@@ -166,7 +167,15 @@ src/twcrawl/
 ├── bizreg.py     財政部 BGMOPEN1 稅籍登記（66MB zip 串流過濾，只留自己的統編入
 │                 biz_registry；欄位以關鍵字定位；Py3.13 需關 VERIFY_X509_STRICT——
 │                 政府憑證缺 SKI）
-├── export.py     五頁衍生（out/data.js＋**複製整個 web/ 目錄**——ui.js 是五頁的必要
+├── export.py     五頁衍生。`invoice_rows(conn, classifier)` 是**共用的衍生層**
+│                 （#26）：分類（含品項覆寫）、招牌名、狀態中文在這裡定案，
+│                 build_payload 與 csvout 呼叫同一支——各組一次的話 CSV 會跟
+│                 五頁講不一樣的分類，而那種不一致是靜默的。回傳 `InvoiceRow`
+│                 （row／cat／si 三面）：row 進 payload／CSV，cat 與 si 給聚合
+│                 與 CSV 的額外欄位（非必要、統編、行業）。`si["ban"]` 取該
+│                 店家名下任一非空的統編，與 industry 同一條規則（半數發票
+│                 不帶統編，逐張取會讓同一家店有些列空著）。
+│                 其餘（out/data.js＋**複製整個 web/ 目錄**——ui.js 是五頁的必要
 │                 相依，逐檔明列時漏一個會從「少一頁」變成「五頁都壞但看起來像沒
 │                 資料」；file:// 不能 fetch JSON 所以走 script src；
 │                 店家附行業/地址/常買品項 top3；發票列含品項全欄位與發票號碼——
@@ -195,6 +204,18 @@ src/twcrawl/
 │                 在這指派並持久化 state/catslots.json（在榜沿用、新進取空槽、
 │                 槽滿只收落榜者），payload 帶 categories[].slot，頁面只讀——
 │                 跨次匯出同分類同色，未分類永遠中性灰）
+├── csvout.py     指令級 CSV 匯出（#26）：`out/invoices.csv`＋`out/items.csv`，
+│                 以發票號碼為鍵。**兩份而不是一份寬表**——庫內 14.3% 的發票
+│                 「明細加總 ≠ 發票金額」（折讓、湊整），單一寬表不管怎麼設計
+│                 都會讓某一種加總悄悄變成錯的（加總品項會與儀表板差一截、
+│                 加總重複填的發票金額會重複計算）。差異張數由 write_csv 回報，
+│                 摘要一定要講：使用者第一次做樞紐就會撞到，那時沒有任何線索。
+│                 items 冗餘帶日期／店家／分類（重複的是維度不是金額，不造成
+│                 加總歧義；沒有這三欄每次都得先 VLOOKUP）。序號是「該張發票
+│                 內的第幾列」不是資料庫的 row_no——payload 的 items 不帶它，
+│                 要它帶就會動到 data.js。資料走 `export.invoice_rows`，分類與
+│                 招牌名不可能與五頁分岔；載具號碼與 raw 不進 CSV（ADR-0002）。
+│                 `_num` 不四捨五入（單價的 62.5 捨掉會與價格追蹤對不起來）
 ├── serve.py      本機小站（ADR-0002 雙模式；只綁 127.0.0.1）：靜態服務 out/ ＋
 │                 POST /api/rules 併規則入 categories.local.json→重生 data.js；
 │                 ThreadingHTTPServer，每請求自開 SQLite 連線（執行緒安全）。
@@ -279,8 +300,10 @@ src/twcrawl/
 ├── geocode.py    地址→座標：NLSC TextQueryMap 門牌級為主（**要帶 maps.nlsc.gov.tw
 │                 的 Referer** 否則 PERMISSION DENIED）、Nominatim 路段級後備（台灣
 │                 門牌會 MISS）；稅籍地址須清洗（全形、里鄰、截到「號」）
-├── web/control.html 控制台（#20～#22，serve 專屬）：每月例行／登入／抓區間／
-│                 匯入／重生報表五顆按鈕、輸出即時顯示、成敗與中止狀態。
+├── web/control.html 控制台（#20～#22、#26，serve 專屬）：每月例行／登入／
+│                 抓區間／匯入／重生報表／匯出 CSV 六顆按鈕、輸出即時顯示、
+│                 成敗與中止狀態。**匯出 CSV 不給檔案連結**——瀏覽器不讓
+│                 http://127.0.0.1 的頁面連 file://，路徑只能印在輸出裡。
 │                 匯入收的是**路徑不是選檔視窗**——瀏覽器只給檔名不給路徑，
 │                 真走選檔就得上傳整個檔案再落地一份到暫存目錄，而那份是消費
 │                 紀錄，多一份就多一個要記得刪的地方；貼路徑則一個位元組都不
@@ -826,7 +849,6 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   `[Console]::IsInputRedirected`，問不到就不問、照常啟動（測試釘住這條，
   沒有它整支測試會逾時）。互動那條分支另外包 try/catch：選配功能出錯不該讓
   控制台開不起來。測試 68→69
-- ⬜ 緩辦（要做先問）：CSV 匯出——**指令級的**，查詢頁的客戶端「另存 CSV」已經有了
 - ⬜ 使用者待辦：持續補 categories.local.json 規則（儀表板未分類清單現在附
   稅籍行業與常買品項，好判多了）；跑一次 `twcrawl backup` 並把備份包放上 Google Drive
 - ✅ 歷年回溯已結案：**做不到，而且不是實作問題**（2026-08-01 使用者拍板要抓、
@@ -886,3 +908,22 @@ Single-context：root `CONTEXT.md` + `docs/adr/`。見 `docs/agents/domain.md`�
   事，所以另加一支「兩個表的店家按鈕都要跳得動」）。golden 只動三行（class
   名 `linkish`→`linkish.goseller`、`pseller`→`goseller`），其餘零差異；
   測試 71/71
+- ✅ **`twcrawl csv`（2026-08-02，issue #26；緩辦清單最後一條，至此清空）**：
+  兩份檔給試算表自己樞紐——五頁是預先設計好的視角，「某類店家這半年的單價
+  分布」這種臨時問題它答不了。設計經一輪 grilling 定案，**最關鍵的一題是
+  粒度**，而它是被量測決定的：498 張發票 100% 有明細（一列一品項不會漏掉整
+  張），但 **71 張（14.3%）的「明細加總 ≠ 發票金額」**（相對誤差中位數 5.3%、
+  最大 127%，api 與 csv 兩種來源都有）——所以單一寬表不管怎麼設計都會讓某
+  一種加總悄悄變成錯的，改成兩份、以發票號碼為鍵，「哪一種加總是對的」才
+  變成使用者選得出來的事，而那 71 張由摘要點名（不講的話第一次樞紐就會撞
+  到，那時沒有任何線索）。其餘定案見架構的 csvout.py 條目與 #26。
+  實作上真正的功夫在 `export.invoice_rows` 的抽出：那支迴圈同時在累積月份／
+  分類／店家聚合，抽的時候容易動到輸出——**真實資料 payload SHA256 逐位元組
+  相同**（498 張／134 店家）、六份 golden 零 diff。順帶把 `si["ban"]` 補進
+  `_seller_info`（payload 的 sellers[] 逐鍵挑，不受影響），統編因此與 industry
+  同一條規則：取該店家名下任一非空，逐張取會讓同一家店在樞紐表裡有些列空著。
+  **駁回**：範圍參數（試算表本來就是拿來篩的，加了等於兩處各一套篩選，而
+  「我匯出的是不是全部」會變成要記住的狀態）、`--out`（2026-07-30 那條決策
+  就是在收這種東西）、進 update（匯出是「我現在要拿去試算表」的動作，不是
+  例行產物）。測試 71→72（形狀／BOM 與 CRLF 的位元組／品名含逗號引號換行
+  不打散表格／冗餘三欄逐字一致／不一致計數／空庫只有表頭／白名單不宣稱重生）

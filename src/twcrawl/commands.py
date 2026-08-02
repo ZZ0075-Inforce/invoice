@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import backup as backup_mod
-from . import db, export, handoff, lottery
+from . import csvout, db, export, handoff, lottery
 from .browser import browser_context
 from .categories import Classifier
 from .match import run_match
@@ -216,6 +216,23 @@ def cmd_export(conn, ws: Workspace, *, open_browser: bool = True) -> dict:
     if open_browser:
         open_dashboard(dash)
     return {"dashboard": str(dash)}
+
+
+def cmd_csv(conn, ws: Workspace) -> dict:
+    return csvout.write_csv(conn, ws, _classifier(ws))
+
+
+def format_csv(res: dict) -> str:
+    """匯出摘要。**一定要講那句不一致**——兩份檔各自加總對不起來是資料本身
+    的性質，使用者第一次做樞紐就會撞到，而那時候沒有任何線索可循。"""
+    lines = [f"發票 {res['n_invoices']} 張 → {res['invoices']}",
+             f"明細 {res['n_items']} 列 → {res['items']}"]
+    if res["mismatched"]:
+        lines.append(
+            f"！其中 {res['mismatched']} 張的明細加總與發票金額不同"
+            "（折讓、平台湊整都會造成）——五頁一律以發票金額為準，"
+            "要對總額請用 invoices.csv")
+    return "\n".join(lines)
 
 
 def cmd_backup(ws: Workspace, password: str, *,
