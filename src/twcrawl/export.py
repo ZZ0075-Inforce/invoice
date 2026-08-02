@@ -265,7 +265,7 @@ def _detect_fixed(inv_rows: list[dict]) -> list[dict]:
 # 價格追蹤的判準（issue #23）。查詢頁把這些數字寫進說明文案，所以由 payload
 # 帶過去——理由同 FIXED_RULE：門檻在這裡、文案在頁面，改了門檻文案不會跟著改。
 PRICE_RULE = {
-    "minPoints": 2,     # 至少幾個不同購買日才算「可追蹤」（下限是 2，見 _detect_price）
+    "minPoints": 2,     # 至少幾個不同購買日才算「可追蹤」（不得小於 2，測試釘住）
     "risePct": 5,       # 最近一次高出先前中位數幾 % 才算漲價
     "spreadCap": 3,     # 高低比超過幾倍就當同名不同品，不進漲價清單
     "staleDays": 90,    # 幾天沒再買就標「久未購買」——標記，不濾除
@@ -273,11 +273,15 @@ PRICE_RULE = {
 
 
 def _price_of(item: dict) -> float | None:
-    """一列品項的單價：`unit_price` 優先，整個缺了才用 `amount ÷ quantity` 回推。
+    """一列品項的單價：`price` 優先，整個缺了才用 `amount ÷ qty` 回推。
+
+    吃的是 payload 的鍵（`price`／`qty`／`amount`），不是資料庫欄名
+    （`unit_price`／`quantity`）——這個函式在 `invoice_rows` 組好之後才跑。
 
     **不拿 amount 當價格**——量測顯示 8.1% 的列數量不是 1，拿金額比價會把
     「買兩包」讀成漲價一倍。回推只在單價是 None 時做（舊版 M/D CSV 解析路徑
     寫 None；現有資料庫沒有這種列，但 `twcrawl import` 匯入舊格式檔就會產生）。
+    兩個都沒有就回 None，由呼叫端算進 `rowsDropped`。
 
     單價 0 或負數的列不採用也不回推：那是贈品與折讓，不是這個品項的價格。
     採用 0 會讓「贈品→正常價」變成無限大的漲幅，回推更會拿到負數。
@@ -336,8 +340,10 @@ def _detect_price(inv_rows: list[dict]) -> dict:
                 continue
             price, num = same_day[0]
             series.append({"date": d, "price": round(price, 2), "num": num})
-        # minPoints 的下限是 2：先前中位數取 series[:-1]，只有一個點時無從比起
-        if len(series) < max(2, PRICE_RULE["minPoints"]):
+        # 直接讀常數、不夾下限：夾住的話常數說 1、行為是 2，而查詢頁的文案是
+        # 直接印這個數字的，就會出現「頁面說一件事、程式做另一件」。下限 2
+        # （先前中位數取 series[:-1]，只有一個點時無從比起）由測試釘住
+        if len(series) < PRICE_RULE["minPoints"]:
             continue
         vals = [pt["price"] for pt in series]
         lo, hi = min(vals), max(vals)

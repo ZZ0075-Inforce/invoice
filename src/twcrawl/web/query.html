@@ -817,7 +817,7 @@ TW.page({
       ["可追蹤品項", S.pairs + " 項", `同店同品名、${R.minPoints} 個購買日以上`],
       ["偵測到漲價", S.risen + " 項", `最近一次高於先前中位數 ${R.risePct}% 以上`],
       ["已排除", S.spreadExcluded + " 項",
-       `價格散布超過 ${R.spreadCap} 倍，疑似同名不同品（全表仍查得到）`],
+       `本來會上榜、但價格散布超過 ${R.spreadCap} 倍（全表仍查得到）`],
     ]) {
       const t = el("div", "tile");
       t.append(el("div", "label", label), el("div", "value", value),
@@ -865,10 +865,13 @@ TW.page({
       toSeller(t);
       rc.append(t);
     }
+    // 「已排除 N 項」只計本來會上榜的；全表標「散布 N 倍」的可能更多（那些
+    // 本來就沒到漲價門檻）。不講清楚的話，兩個數字看起來像其中一個在說謊
     if (S.spreadExcluded)
       rc.append(el("div", "note",
-        `已排除 ${S.spreadExcluded} 項：同店同品名但價格散布超過 ${R.spreadCap} 倍，` +
-        "疑似同名不同品（例如規格不同卻共用一個品名）。它們仍列在下方全表。"));
+        `已排除 ${S.spreadExcluded} 項本來會上榜的：同店同品名但價格散布超過 ` +
+        `${R.spreadCap} 倍，疑似同名不同品（例如規格不同卻共用一個品名）。` +
+        "它們仍列在下方全表。"));
     card.append(rc);
 
     // 全表
@@ -881,6 +884,17 @@ TW.page({
     const fwrap = el("div", "scrollx");
     ft.append(ff, fstat, fwrap);
     card.append(ft);
+    // 另外兩道清理的排除數。偵測端算了卻不印的話，對使用者而言仍是靜默丟棄
+    // ——而「為什麼這個品項不在表上」正是看到這裡才會問的問題
+    const cleaned = [];
+    if (S.rowsDropped)
+      cleaned.push(`${S.rowsDropped} 列取不到正價（贈品、折讓，` +
+                   "或沒有單價也回推不出價格的列）");
+    if (S.daysDropped)
+      cleaned.push(`${S.daysDropped} 個同店同品名卻出現兩種價格的購買日`);
+    if (cleaned.length)
+      card.append(el("div", "note",
+        "比價前已排除 " + cleaned.join("、") + "，它們不列入上面的價格點。"));
     body.append(card);
 
     const pq = ff.querySelector("#pq");

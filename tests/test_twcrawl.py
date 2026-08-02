@@ -2873,7 +2873,13 @@ def test_fixed_spend_detection():
 
 def test_price_tracking_detection():
     """同店價格追蹤（issue #23）：三道清理、漲價判定的邊界、久未購買旗標。"""
-    from twcrawl.export import _detect_price
+    from twcrawl.export import _detect_price, PRICE_RULE
+
+    # 下限 2 由這裡釘住，不由 _detect_price 夾住（#24）：夾住的話常數說 1、
+    # 行為是 2，而查詢頁的文案是直接印這個數字的。設成 1 也真的會炸——
+    # 先前中位數取 series[:-1]，只有一個點時那是空序列
+    assert PRICE_RULE["minPoints"] >= 2, \
+        "minPoints 不得小於 2：只有一個價格點時無從比起，而頁面文案直接印它"
 
     def inv(num, date, seller, items):
         """items 是 (品名, 數量, 單價, 金額) 的序列，欄位名同 payload。"""
@@ -2913,6 +2919,10 @@ def test_price_tracking_detection():
         # 久未購買：漲了，但最後一次購買距庫內最新發票 119 天
         inv("N20", "2026-01-17", "辛店", [("久未H", 1, 100.0, 100.0)]),
         inv("N21", "2026-02-17", "辛店", [("久未H", 1, 120.0, 120.0)]),
+        # 單價與數量都是 None：舊版 M/D CSV 匯入的列只有金額（#23 點名的坑）。
+        # 回推不出來就跳過——不炸、不進配對，但要算進 rowsDropped
+        inv("N22", "2026-01-18", "壬店", [("無價I", None, None, 100.0)]),
+        inv("N23", "2026-06-14", "壬店", [("無價I", 1, 100.0, 100.0)]),
     ]
     res = _detect_price(rows)
     pairs = {p["desc"]: p for p in res["pairs"]}
@@ -2926,7 +2936,9 @@ def test_price_tracking_detection():
         "沒有單價時要用 金額÷數量 回推，不能拿 amount 當價格"
 
     assert "贈品D" not in pairs, "非正價的列丟掉後只剩一個價格點，配對不該成立"
-    assert st["rowsDropped"] == 2, f"贈品與折讓各一列要被算進去：{st}"
+    assert "無價I" not in pairs, "單價與數量都缺的列要跳過，剩一個點就不成配對"
+    assert st["rowsDropped"] == 3, \
+        f"贈品、折讓、單價與數量都缺的各一列都要被算進去：{st}"
     assert pairs["同日E"]["n"] == 2 and st["daysDropped"] == 1, \
         f"同一天同品名不同價 → 丟該日並記下來：{st}"
 
@@ -2943,7 +2955,8 @@ def test_price_tracking_detection():
     # 價格點帶發票號碼：查詢頁的「點日期看那張發票」靠它
     assert [pt["num"] for pt in pairs["常買A"]["points"]] == \
         ["N1", "N2", "N3", "N4"], pairs["常買A"]["points"]
-    print("✓ 價格追蹤偵測：三道清理各自留數字、+5% 邊界、回推單價、久未購買")
+    print("✓ 價格追蹤偵測：三道清理各自留數字、+5% 邊界、回推單價（缺就跳過）、"
+          "久未購買")
 
 
 # ------------------------------------------------------------- 對獎 --
@@ -3307,8 +3320,10 @@ def a_payload(**overrides) -> dict:
                  "pct": 0.0, "risen": False, "spanDays": 48,
                  "daysSince": 0, "stale": False},
             ],
+            # 兩道清理刻意給非零：排除說明只在非零時出現，全 0 的 fixture
+            # 會讓 golden 拍不到它（#24）
             "stats": {"pairs": 2, "risen": 0, "spreadExcluded": 0,
-                      "rowsDropped": 0, "daysDropped": 0},
+                      "rowsDropped": 3, "daysDropped": 1},
         },
         "priceRule": {"minPoints": 2, "risePct": 5, "spreadCap": 3,
                       "staleDays": 90},
@@ -3916,10 +3931,16 @@ def test_query_price_view():
         inv("P9", "2026-01-03", "測試量販", "文具", 20.0),
         inv("P10", "2026-02-03", "測試量販", "文具", 20.0),
         inv("P11", "2026-06-03", "測試量販", "文具", 300.0),
+        # 另外兩道清理：非正價兩列、同一天兩種價格一天。三者都成不了配對，
+        # 所以只會出現在排除說明裡——不印的話對使用者就是靜默丟棄
+        inv("P12", "2026-01-07", "測試藥妝", "體驗包", 0.0),
+        inv("P13", "2026-02-07", "測試藥妝", "折讓", -30.0),
+        inv("P14", "2026-03-07", "測試藥妝", "面紙", 30.0),
+        inv("P15", "2026-03-07", "測試藥妝", "面紙", 45.0),
     ]
     price = _detect_price(rows)
     assert price["stats"] == {"pairs": 4, "risen": 3, "spreadExcluded": 1,
-                              "rowsDropped": 0, "daysDropped": 0}, price["stats"]
+                              "rowsDropped": 2, "daysDropped": 1}, price["stats"]
 
     js = """(step) => {
       const q = s => document.querySelectorAll(s);
@@ -3929,6 +3950,7 @@ def test_query_price_view():
         all: q("#pall table tr.inv").length,
         tiles: [...q(".tile .value")].map(txt),
         note: txt(document.querySelector("#prisen .note")),
+        cleanNote: txt(document.querySelector("#pall + .note")),
         firstRow: txt(q("#prisen table tr.inv")[0]),
         spreadRow: txt(q("#pall table tr.inv")[3]),
       };
@@ -3973,6 +3995,14 @@ def test_query_price_view():
             assert c["tiles"] == ["4 項", "3 項", "1 項"], c["tiles"]
             assert "已排除 1 項" in c["note"] and "同名不同品" in c["note"], (
                 f"被高低比擋下的要在清單旁點名與說明理由，實得 {c['note']!r}")
+            # 磚只計「本來會上榜」的，全表標「散布 N 倍」的可能更多——不講清楚
+            # 的話兩個數字看起來像其中一個在說謊
+            assert "本來會上榜" in c["note"], (
+                f"要講清楚「已排除」只計本來會上榜的，實得 {c['note']!r}")
+            # 另外兩道清理：偵測端算了就要印出來（#24）
+            assert "2 列" in c["cleanNote"] and "1 個" in c["cleanNote"], (
+                f"非正價列數與同日丟棄的天數都要出現在頁面上，"
+                f"實得 {c['cleanNote']!r}")
             assert "蛋餅" in c["firstRow"] and "+25%" in c["firstRow"], (
                 f"漲幅最大的要排第一，實得 {c['firstRow']!r}")
             assert "天沒買了" in c["firstRow"], (
@@ -3992,7 +4022,8 @@ def test_query_price_view():
             assert j["view"] == "發票清單" and j["q"] == j["num"], (
                 f"點價格點的發票號碼要跳到發票清單並以號碼篩選，實得 {j}")
             page.close()
-    print("✓ 價格追蹤視圖：清單/排除說明/n≥3 才畫圖/全表搜尋/點發票號碼跳清單")
+    print("✓ 價格追蹤視圖：清單/三道清理的排除數/n≥3 才畫圖/全表搜尋/"
+          "點發票號碼跳清單")
 
 
 def test_map_seller_search():
